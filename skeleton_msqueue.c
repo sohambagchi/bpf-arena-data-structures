@@ -325,12 +325,7 @@ static void print_statistics(struct worker_context *workers, int num_workers)
 	printf("  Total operations: %llu\n", skel->bss->total_kernel_ops);
 	printf("  Total failures:   %llu\n", skel->bss->total_kernel_failures);
 	
-	/* Arena statistics */
-	printf("\nArena Memory Statistics:\n");
-	printf("  Allocations:      %llu\n", skel->bss->global_stats.total_allocs);
-	printf("  Frees:            %llu\n", skel->bss->global_stats.total_frees);
-	printf("  Current allocs:   %llu\n", skel->bss->global_stats.current_allocations);
-	printf("  Failed allocs:    %llu\n", skel->bss->global_stats.failed_allocs);
+	/* Arena statistics not accessible from userspace (arena memory not in BSS) */
 	
 	/* Data structure statistics */
 	printf("\nMS Queue State:\n");
@@ -475,13 +470,10 @@ int main(int argc, char **argv)
 	
 	printf("BPF programs attached successfully\n");
 	
-	/* Configure BPF program */
-	skel->bss->config_num_operations = config.ops_per_thread;
-	skel->bss->config_key_range = config.key_range;
+	/* Note: BPF program uses default values for config_num_operations and config_key_range */
 	
 	/* Initialize data structure from kernel side */
 	LIBBPF_OPTS(bpf_test_run_opts, opts);
-	struct ds_operation init_op = { .type = DS_OP_INIT };
 	err = bpf_prog_test_run_opts(
 		bpf_program__fd(skel->progs.manual_operation), &opts);
 	if (err) {
