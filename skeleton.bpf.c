@@ -151,6 +151,7 @@ int trace_exec(struct trace_event_raw_sys_enter *ctx)
 	
 	if (!initialized) {
 		ds_head = &global_ds_head;
+		cast_kern(ds_head);
 		ds_list_init(ds_head);
 		initialized = true;
 		return 0;
@@ -221,6 +222,7 @@ int manual_operation(struct ds_operation *ctx)
 	
 	if (!initialized) {
 		ds_head = &global_ds_head;
+		cast_kern(ds_head);
 		ds_list_init(ds_head);
 		initialized = true;
 	}
@@ -251,6 +253,7 @@ int batch_operations(void *ctx)
 	
 	if (!initialized) {
 		ds_head = &global_ds_head;
+		cast_kern(ds_head);
 		ds_list_init(ds_head);
 		initialized = true;
 	}
