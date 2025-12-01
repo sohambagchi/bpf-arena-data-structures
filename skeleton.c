@@ -324,12 +324,7 @@ static void print_statistics(struct worker_context *workers, int num_workers)
 	printf("  Total operations: %llu\n", skel->bss->total_kernel_ops);
 	printf("  Total failures:   %llu\n", skel->bss->total_kernel_failures);
 	
-	/* Arena statistics */
-	printf("\nArena Memory Statistics:\n");
-	printf("  Allocations:      %llu\n", skel->bss->global_stats.total_allocs);
-	printf("  Frees:            %llu\n", skel->bss->global_stats.total_frees);
-	printf("  Current allocs:   %llu\n", skel->bss->global_stats.current_allocations);
-	printf("  Failed allocs:    %llu\n", skel->bss->global_stats.failed_allocs);
+	/* Arena statistics not accessible from userspace (arena memory not in BSS) */
 	
 	/* Data structure statistics */
 	printf("\nData Structure State:\n");

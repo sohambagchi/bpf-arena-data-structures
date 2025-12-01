@@ -26,7 +26,8 @@ OUTPUT := .output
 # TOOLCHAIN CONFIGURATION
 # ============================================================================
 # Compiler for BPF programs (must support BPF target)
-CLANG ?= clang
+# Use clang-20 for full BPF arena support
+CLANG ?= clang-20
 
 # Compiler for userspace programs
 CC ?= gcc

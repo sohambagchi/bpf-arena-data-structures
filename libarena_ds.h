@@ -259,6 +259,16 @@ static inline void bpf_arena_reset_stats(void)
 #endif /* __BPF__ */
 
 /* ========================================================================
+ * BPF VERIFIER COMPATIBILITY
+ * ======================================================================== */
+
+/* In BPF context, can_loop is provided by bpf_experimental.h
+ * In userspace, define it as 1 to allow compilation */
+#ifndef can_loop
+#define can_loop 1
+#endif
+
+/* ========================================================================
  * COMMON DEBUGGING AND VALIDATION HELPERS
  * ======================================================================== */
 
