@@ -1,4 +1,7 @@
 /* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
+#ifndef DS_MSQUEUE_H
+#define DS_MSQUEUE_H
+
 /* Michael-Scott Non-Blocking Queue Implementation for BPF Arena
  * 
  * Based on "Simple, Fast, and Practical Non-Blocking and Blocking 
