@@ -202,12 +202,12 @@ static inline void bpf_arena_reset_stats(void)
  * In userspace, we don't allocate - we only access arena memory
  * that was allocated by the BPF side. These are stubs.
  */
-static inline void __arena* bpf_arena_alloc(unsigned int size)
+static inline void __arena* bpf_arena_alloc(unsigned int size __attribute__((unused)))
 {
 	return NULL;
 }
 
-static inline void bpf_arena_free(void __arena *addr)
+static inline void bpf_arena_free(void __arena *addr __attribute__((unused)))
 {
 	/* No-op in userspace */
 }
@@ -216,7 +216,7 @@ static inline void bpf_arena_free(void __arena *addr)
  * Userspace can read statistics from the BPF program's BSS section
  * via the skeleton: skel->bss->global_stats
  */
-static inline void bpf_arena_get_stats(struct arena_stats *stats)
+static inline void bpf_arena_get_stats(struct arena_stats *stats __attribute__((unused)))
 {
 	/* In userspace, access via skeleton: memcpy(stats, &skel->bss->global_stats, sizeof(*stats)) */
 }

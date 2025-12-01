@@ -218,7 +218,7 @@ static void* userspace_worker(void *arg)
 /**
  * syscall_trigger_worker - Trigger syscalls to activate kernel tracepoints
  */
-static void* syscall_trigger_worker(void *arg)
+static void* syscall_trigger_worker(void *arg __attribute__((unused)))
 {
 	int trigger_count = 0;
 	
@@ -475,7 +475,6 @@ int main(int argc, char **argv)
 	
 	/* Initialize data structure from kernel side */
 	LIBBPF_OPTS(bpf_test_run_opts, opts);
-	struct ds_operation init_op = { .type = DS_OP_INIT };
 	err = bpf_prog_test_run_opts(
 		bpf_program__fd(skel->progs.manual_operation), &opts);
 	if (err) {

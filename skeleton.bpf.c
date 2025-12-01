@@ -49,9 +49,9 @@ struct {
  * ======================================================================== */
 
 /* Configuration (set by userspace before running) */
-volatile const int config_num_operations = 100;
-volatile const int config_key_range = 1000;
-volatile const bool config_enable_stats = true;
+int config_num_operations = 100;
+int config_key_range = 1000;
+bool config_enable_stats = true;
 
 /* Operation queue for syscall-triggered operations */
 #define MAX_PENDING_OPS 256

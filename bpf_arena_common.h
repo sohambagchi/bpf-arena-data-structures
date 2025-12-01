@@ -60,8 +60,11 @@ extern char arena[1] __attribute__((weak));
 #define offsetof(type, member)  ((unsigned long)&((type *)0)->member)
 #endif
 
-static inline void __arena* bpf_arena_alloc_pages(void *map, void *addr, __u32 page_cnt,
-						  int node_id, __u64 flags)
+static inline void __arena* bpf_arena_alloc_pages(void *map __attribute__((unused)),
+		void *addr __attribute__((unused)),
+		__u32 page_cnt __attribute__((unused)),
+		int node_id __attribute__((unused)),
+		__u64 flags __attribute__((unused)))
 {
 	return NULL;
 }
