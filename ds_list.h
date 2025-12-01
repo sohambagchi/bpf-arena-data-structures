@@ -72,7 +72,7 @@ struct ds_list_head {
  * __list_add_head - Add node to head of list (internal)
  */
 static inline void __list_add_head(struct ds_list_node __arena *n,
-                                    struct ds_list_head *h)
+                                    struct ds_list_head __arena *h)
 {
 	struct ds_list_node __arena *first = h->first;
 	struct ds_list_node __arena * __arena *tmp;
@@ -89,10 +89,8 @@ static inline void __list_add_head(struct ds_list_node __arena *n,
 	cast_user(n);
 	WRITE_ONCE(h->first, n);
 
-	tmp = &h->first;
-	cast_user(tmp);
 	cast_kern(n);
-	WRITE_ONCE(n->pprev, tmp);
+	n->pprev = &h->first;
 }
 
 /**
@@ -457,14 +455,14 @@ static inline __u64 ds_list_iterate(struct ds_list_head __arena *head,
 	struct ds_list_node __arena *n;
 	__u64 count = 0;
 	
-	if (!head || !callback)
+	if (!head || !fn)
 		return 0;
 	
 	n = head->first;
 	while (n && can_loop) {
 		cast_kern(n);
 		
-		int ret = callback(n->key, n->value, ctx);
+		int ret = fn(n->key, n->value, ctx);
 		if (ret != 0)
 			break;
 		
