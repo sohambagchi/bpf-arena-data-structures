@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
 /* Data Structure API Template for Concurrent Testing Framework */
+#ifndef DS_API_H
+#define DS_API_H
+
 #pragma once
 
 #include "libarena_ds.h"

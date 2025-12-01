@@ -126,7 +126,7 @@ static inline void __list_del(struct ds_list_node __arena *n)
  * 
  * Returns: DS_SUCCESS
  */
-static inline int ds_list_init(struct ds_list_head *head)
+static inline int ds_list_init(struct ds_list_head __arena *head)
 {
 	if (!head)
 		return DS_ERROR_INVALID;
@@ -157,7 +157,7 @@ static inline int ds_list_init(struct ds_list_head *head)
  * 
  * Returns: DS_SUCCESS on success, DS_ERROR_NOMEM if allocation fails
  */
-static inline int ds_list_insert(struct ds_list_head *head, __u64 key, __u64 value)
+static inline int ds_list_insert(struct ds_list_head __arena *head, __u64 key, __u64 value)
 {
 	struct ds_list_node __arena *n, *new_node;
 	__u64 start_time = 0;
@@ -228,7 +228,7 @@ static inline int ds_list_insert(struct ds_list_head *head, __u64 key, __u64 val
  * 
  * Returns: DS_SUCCESS if deleted, DS_ERROR_NOT_FOUND if key doesn't exist
  */
-static inline int ds_list_delete(struct ds_list_head *head, __u64 key)
+static inline int ds_list_delete(struct ds_list_head __arena *head, __u64 key)
 {
 	struct ds_list_node __arena *n;
 	__u64 start_time = 0;
@@ -283,7 +283,7 @@ static inline int ds_list_delete(struct ds_list_head *head, __u64 key)
  * 
  * Returns: DS_SUCCESS if found, DS_ERROR_NOT_FOUND otherwise
  */
-static inline int ds_list_search(struct ds_list_head *head, __u64 key, __u64 *value)
+static inline int ds_list_search(struct ds_list_head __arena *head, __u64 key, __u64 *value)
 {
 	struct ds_list_node __arena *n;
 	__u64 start_time = 0;
@@ -336,7 +336,7 @@ static inline int ds_list_search(struct ds_list_head *head, __u64 key, __u64 *va
  * 
  * Returns: DS_SUCCESS if valid, DS_ERROR_CORRUPT otherwise
  */
-static inline int ds_list_verify(struct ds_list_head *head)
+static inline int ds_list_verify(struct ds_list_head __arena *head)
 {
 	struct ds_list_node __arena *n;
 	struct ds_list_node __arena * __arena *expected_pprev;
@@ -346,7 +346,7 @@ static inline int ds_list_verify(struct ds_list_head *head)
 	if (!head)
 		return DS_ERROR_INVALID;
 	
-	expected_pprev = &head->first;
+	cast_kern(head);
 	n = head->first;
 	
 	while (n && count < max_iterations && can_loop) {
@@ -384,7 +384,7 @@ static inline int ds_list_verify(struct ds_list_head *head)
  * @head: List head
  * @stats: Output parameter for statistics
  */
-static inline void ds_list_get_stats(struct ds_list_head *head, struct ds_stats *stats)
+static inline void ds_list_get_stats(struct ds_list_head __arena *head, struct ds_stats *stats)
 {
 	if (!head || !stats)
 		return;
@@ -405,7 +405,7 @@ static inline void ds_list_get_stats(struct ds_list_head *head, struct ds_stats 
  * ds_list_reset_stats - Reset operation statistics
  * @head: List head
  */
-static inline void ds_list_reset_stats(struct ds_list_head *head)
+static inline void ds_list_reset_stats(struct ds_list_head __arena *head)
 {
 	if (!head)
 		return;
@@ -450,8 +450,8 @@ static inline const struct ds_metadata* ds_list_get_metadata(void)
  */
 typedef int (*ds_list_iter_fn)(__u64 key, __u64 value, void *ctx);
 
-static inline __u64 ds_list_iterate(struct ds_list_head *head,
-                                     ds_list_iter_fn callback,
+static inline __u64 ds_list_iterate(struct ds_list_head __arena *head,
+                                     ds_list_iter_fn fn,
                                      void *ctx)
 {
 	struct ds_list_node __arena *n;

@@ -6,7 +6,7 @@
  * and userspace (via direct arena access).
  * 
  * CUSTOMIZATION POINTS:
- * - Include your data structure header below (marked /* DS_API_INSERT */)
+ * - Include your data structure header below (search for DS_API_INSERT)
  * - Add operation dispatch cases in handle_operation()
  * - Configure arena size in the map definition
  */

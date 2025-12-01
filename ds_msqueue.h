@@ -60,7 +60,7 @@ struct ds_msqueue_head {
  * 
  * Returns: DS_SUCCESS or DS_ERROR_NOMEM if allocation fails
  */
-static inline int ds_msqueue_init(struct ds_msqueue_head *head)
+static inline int ds_msqueue_init(struct ds_msqueue_head __arena *head)
 {
 	struct ds_msqueue_node __arena *dummy;
 	
@@ -108,7 +108,7 @@ static inline int ds_msqueue_init(struct ds_msqueue_head *head)
  * 
  * Returns: DS_SUCCESS on success, DS_ERROR_NOMEM if allocation fails
  */
-static inline int ds_msqueue_insert(struct ds_msqueue_head *head, __u64 key, __u64 value)
+static inline int ds_msqueue_insert(struct ds_msqueue_head __arena *head, __u64 key, __u64 value)
 {
 	struct ds_msqueue_node __arena *new_node;
 	struct ds_msqueue_node __arena *tail;
@@ -208,7 +208,7 @@ static inline int ds_msqueue_insert(struct ds_msqueue_head *head, __u64 key, __u
  * 
  * Returns: DS_SUCCESS if dequeued, DS_ERROR_NOT_FOUND if queue is empty
  */
-static inline int ds_msqueue_delete(struct ds_msqueue_head *head, __u64 key)
+static inline int ds_msqueue_delete(struct ds_msqueue_head __arena *head, __u64 key)
 {
 	struct ds_msqueue_node __arena *h;
 	struct ds_msqueue_node __arena *tail;
@@ -304,7 +304,7 @@ static inline int ds_msqueue_delete(struct ds_msqueue_head *head, __u64 key)
  * 
  * Returns: DS_SUCCESS if found, DS_ERROR_NOT_FOUND otherwise
  */
-static inline int ds_msqueue_search(struct ds_msqueue_head *head, __u64 key, __u64 *value)
+static inline int ds_msqueue_search(struct ds_msqueue_head __arena *head, __u64 key, __u64 *value)
 {
 	struct ds_msqueue_node __arena *node;
 	struct ds_msqueue_node __arena *h;
@@ -366,7 +366,7 @@ static inline int ds_msqueue_search(struct ds_msqueue_head *head, __u64 key, __u
  * 
  * Returns: DS_SUCCESS if valid, DS_ERROR_CORRUPT otherwise
  */
-static inline int ds_msqueue_verify(struct ds_msqueue_head *head)
+static inline int ds_msqueue_verify(struct ds_msqueue_head __arena *head)
 {
 	struct ds_msqueue_node __arena *node;
 	struct ds_msqueue_node __arena *h;
@@ -426,7 +426,7 @@ static inline int ds_msqueue_verify(struct ds_msqueue_head *head)
 /**
  * ds_msqueue_get_stats - Get queue statistics
  */
-static inline void ds_msqueue_get_stats(struct ds_msqueue_head *head, struct ds_stats *stats)
+static inline void ds_msqueue_get_stats(struct ds_msqueue_head __arena *head, struct ds_stats *stats)
 {
 	if (!head || !stats)
 		return;
@@ -446,7 +446,7 @@ static inline void ds_msqueue_get_stats(struct ds_msqueue_head *head, struct ds_
 /**
  * ds_msqueue_reset_stats - Reset queue statistics
  */
-static inline void ds_msqueue_reset_stats(struct ds_msqueue_head *head)
+static inline void ds_msqueue_reset_stats(struct ds_msqueue_head __arena *head)
 {
 	if (!head)
 		return;
@@ -486,7 +486,7 @@ static inline const struct ds_metadata* ds_msqueue_get_metadata(void)
  */
 typedef int (*ds_msqueue_iter_fn)(__u64 key, __u64 value, void *ctx);
 
-static inline __u64 ds_msqueue_iterate(struct ds_msqueue_head *head,
+static inline __u64 ds_msqueue_iterate(struct ds_msqueue_head __arena *head,
                                         ds_msqueue_iter_fn fn,
                                         void *ctx)
 {
