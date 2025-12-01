@@ -35,10 +35,10 @@ CC ?= gcc
 # DEPENDENCY PATHS
 # ============================================================================
 # libbpf source directory - provides BPF loading and management APIs
-LIBBPF_SRC := $(abspath ../../third_party/libbpf/src)
+LIBBPF_SRC := $(abspath ./third_party/libbpf/src)
 
 # bpftool source directory - generates BPF skeletons
-BPFTOOL_SRC := $(abspath ../../third_party/bpftool/src)
+BPFTOOL_SRC := $(abspath ./third_party/bpftool/src)
 
 # Built libbpf static library
 LIBBPF_OBJ := $(abspath $(OUTPUT)/libbpf.a)
@@ -60,7 +60,7 @@ ARCH ?= $(shell uname -m | sed 's/x86_64/x86/' \
 			 | sed 's/loongarch64/loongarch/')
 
 # vmlinux.h - kernel type definitions for BPF programs
-VMLINUX := ../../third_party/vmlinux/$(ARCH)/vmlinux.h
+VMLINUX := ./third_party/vmlinux/$(ARCH)/vmlinux.h
 
 # ============================================================================
 # INCLUDE PATHS
@@ -70,7 +70,7 @@ VMLINUX := ../../third_party/vmlinux/$(ARCH)/vmlinux.h
 # - libbpf/include/uapi: For BPF UAPI headers
 # - $(dir $(VMLINUX)): For vmlinux.h
 # - .: For local headers (ds_api.h, libarena_ds.h, etc.)
-INCLUDES := -I$(OUTPUT) -I../../third_party/libbpf/include/uapi -I$(dir $(VMLINUX)) -I.
+INCLUDES := -I$(OUTPUT) -I./third_party/libbpf/include/uapi -I$(dir $(VMLINUX)) -I.
 
 # ============================================================================
 # COMPILER FLAGS
@@ -86,7 +86,7 @@ ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
 # ============================================================================
 # List of all applications to build
 # Add your new programs here!
-APPS = skeleton skeleton_msqueue arena_list
+APPS = skeleton arena_list
 
 # ============================================================================
 # CLANG BPF SYSTEM INCLUDES
