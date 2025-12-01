@@ -60,7 +60,7 @@ ARCH ?= $(shell uname -m | sed 's/x86_64/x86/' \
 			 | sed 's/loongarch64/loongarch/')
 
 # vmlinux.h - kernel type definitions for BPF programs
-VMLINUX := ./third_party/vmlinux/$(ARCH)/vmlinux.h
+VMLINUX := ./third_party/vmlinux/include/$(ARCH)/vmlinux.h
 
 # ============================================================================
 # INCLUDE PATHS
