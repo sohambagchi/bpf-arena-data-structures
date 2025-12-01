@@ -469,9 +469,7 @@ int main(int argc, char **argv)
 	
 	printf("BPF programs attached successfully\n");
 	
-	/* Configure BPF program */
-	skel->bss->config_num_operations = config.ops_per_thread;
-	skel->bss->config_key_range = config.key_range;
+	/* Note: BPF program uses default values for config_num_operations and config_key_range */
 	
 	/* Initialize data structure from kernel side */
 	LIBBPF_OPTS(bpf_test_run_opts, opts);
