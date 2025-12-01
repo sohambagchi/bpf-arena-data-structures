@@ -164,7 +164,7 @@ static inline int ds_msqueue_insert(struct ds_msqueue_head __arena *head, __u64 
 			if (arena_atomic_cmpxchg(&tail->next, next, new_node) == next) {
 				/* Successfully linked, now try to swing tail */
 				cast_user(tail);
-				arena_atomic_cmpxchg(&head->tail, tail, new_node);
+				(void)arena_atomic_cmpxchg(&head->tail, tail, new_node);
 				
 				/* Update statistics */
 				arena_atomic_inc(&head->count);
@@ -187,7 +187,7 @@ static inline int ds_msqueue_insert(struct ds_msqueue_head __arena *head, __u64 
 			/* Tail is lagging behind, help move it forward */
 			cast_user(next);
 			cast_user(tail);
-			arena_atomic_cmpxchg(&head->tail, tail, next);
+			(void)arena_atomic_cmpxchg(&head->tail, tail, next);
 		}
 		retry_count++;
 	}
@@ -211,7 +211,7 @@ static inline int ds_msqueue_insert(struct ds_msqueue_head __arena *head, __u64 
  * 
  * Returns: DS_SUCCESS if dequeued, DS_ERROR_NOT_FOUND if queue is empty
  */
-static inline int ds_msqueue_delete(struct ds_msqueue_head __arena *head, __u64 key)
+static inline int ds_msqueue_delete(struct ds_msqueue_head __arena *head, __u64 key __attribute__((unused)))
 {
 	struct ds_msqueue_node __arena *h;
 	struct ds_msqueue_node __arena *tail;
@@ -255,7 +255,7 @@ static inline int ds_msqueue_delete(struct ds_msqueue_head __arena *head, __u64 
 			/* Tail is pointing to head, help move it forward */
 			cast_user(next);
 			cast_user(tail);
-			arena_atomic_cmpxchg(&head->tail, tail, next);
+			(void)arena_atomic_cmpxchg(&head->tail, tail, next);
 			retry_count++;
 			continue;
 		}
@@ -264,9 +264,6 @@ static inline int ds_msqueue_delete(struct ds_msqueue_head __arena *head, __u64 
 		cast_user(next);
 		if (arena_atomic_cmpxchg(&head->head, h, next) == h) {
 			/* Successfully dequeued */
-			cast_kern(next);
-			__u64 dequeued_key = next->key;
-			__u64 dequeued_value = next->value;
 			
 			/* Free the old dummy node (h) */
 			cast_user(h);

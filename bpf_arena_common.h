@@ -68,7 +68,9 @@ static inline void __arena* bpf_arena_alloc_pages(void *map __attribute__((unuse
 {
 	return NULL;
 }
-static inline void bpf_arena_free_pages(void *map, void __arena *ptr, __u32 page_cnt)
+static inline void bpf_arena_free_pages(void *map __attribute__((unused)),
+		void __arena *ptr __attribute__((unused)),
+		__u32 page_cnt __attribute__((unused)))
 {
 }
 

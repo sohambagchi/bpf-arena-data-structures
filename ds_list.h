@@ -337,7 +337,7 @@ static inline int ds_list_search(struct ds_list_head __arena *head, __u64 key, _
 static inline int ds_list_verify(struct ds_list_head __arena *head)
 {
 	struct ds_list_node __arena *n;
-	struct ds_list_node __arena * __arena *expected_pprev;
+	struct ds_list_node __arena * __arena *expected_pprev = &head->first;
 	__u64 count = 0;
 	__u64 max_iterations = 100000; /* Prevent infinite loops */
 	
