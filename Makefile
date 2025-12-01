@@ -7,7 +7,6 @@
 # USAGE:
 #   make                    # Build all programs
 #   make skeleton           # Build just the skeleton test program
-#   make arena_list         # Build the original arena_list example
 #   make clean              # Remove all build artifacts
 #   make test               # Run basic smoke tests
 #
@@ -87,7 +86,7 @@ ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
 # ============================================================================
 # List of all applications to build
 # Add your new programs here!
-APPS = skeleton arena_list
+APPS = skeleton
 
 # ============================================================================
 # CLANG BPF SYSTEM INCLUDES
@@ -139,7 +138,6 @@ all: $(APPS)
 	@echo ""
 	@echo "Run tests with:"
 	@echo "  sudo ./skeleton -t 4 -o 1000"
-	@echo "  sudo ./arena_list 100"
 
 .PHONY: clean
 clean:
@@ -240,16 +238,13 @@ $(APPS): %: $(OUTPUT)/%.o $(LIBBPF_OBJ) | $(OUTPUT)
 # ============================================================================
 
 .PHONY: test
-test: skeleton arena_list
+test: skeleton
 	@echo "Running smoke tests..."
 	@echo ""
-	@echo "Test 1: Arena list example"
-	sudo ./arena_list 10 || (echo "FAILED: arena_list"; exit 1)
-	@echo ""
-	@echo "Test 2: Skeleton with 2 threads, 100 ops"
+	@echo "Test 1: Skeleton with 2 threads, 100 ops"
 	sudo ./skeleton -t 2 -o 100 -w insert || (echo "FAILED: skeleton insert"; exit 1)
 	@echo ""
-	@echo "Test 3: Skeleton with mixed workload"
+	@echo "Test 2: Skeleton with mixed workload"
 	sudo ./skeleton -t 4 -o 200 -w mixed || (echo "FAILED: skeleton mixed"; exit 1)
 	@echo ""
 	@echo "All tests passed!"
@@ -284,7 +279,6 @@ help:
 	@echo "Targets:"
 	@echo "  all          Build all programs (default)"
 	@echo "  skeleton     Build skeleton test program"
-	@echo "  arena_list   Build arena_list example"
 	@echo "  clean        Remove all build artifacts"
 	@echo "  test         Run basic smoke tests"
 	@echo "  test-stress  Run stress tests"
