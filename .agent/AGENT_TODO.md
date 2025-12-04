@@ -1,125 +1,123 @@
 # TODO: Remaining Work
 
+## Current Status
+
+✅ **Core framework is WORKING**
+- Skeleton list implementation compiles and loads successfully
+- LSM-based kernel insertion works correctly
+- Userspace can read from arena directly
+- Simplified bump allocator functioning
+- No statistics tracking (intentionally removed for simplicity)
+
 ## High Priority - Testing & Validation
 
-### 1. Test MS Queue Implementation
-- [ ] Run `sudo ./skeleton_msqueue -t 4 -o 1000` to verify basic functionality
-- [ ] Check for FIFO ordering correctness in output
-- [ ] Run stress test: `sudo ./skeleton_msqueue -t 16 -o 10000 -w mixed`
-- [ ] Verify no memory leaks: check arena stats after long runs
-- [ ] Test verification function: `sudo ./skeleton_msqueue -v`
-- [ ] Compare performance vs `skeleton` (linked list) implementation
+### 1. Test Current Skeleton Implementation
+- [ ] Run basic test: `sudo ./skeleton -d 5`
+- [ ] Test with verification: `sudo ./skeleton -d 5 -v`
+- [ ] Run longer duration: `sudo ./skeleton -d 30`
+- [ ] Verify data structure integrity across multiple runs
+- [ ] Check for memory leaks during extended runs
 
-### 2. Fix Original Skeleton BPF Verifier Issue
-**Status:** Still failing with "R1 invalid mem access 'scalar'" error
+### 2. MS Queue Implementation (INCOMPLETE - PAUSED)
+**Status:** Not yet functional, paused for now
 
-**Problem:** In `skeleton.bpf.c`, the code does:
-```c
-ds_head = &global_ds_head;
-cast_kern(ds_head);
-ds_list_init(ds_head);
-```
+**What's there:**
+- `ds_msqueue.h` - Header with MS Queue algorithm implementation
+- `skeleton_msqueue.bpf.c` and `skeleton_msqueue.c` - Skeleton files
 
-But verifier still rejects it. The `cast_kern()` is present but apparently not working.
+**What's needed:**
+- Testing and debugging
+- Verification of lock-free properties
+- Performance comparison with list implementation
 
-**Investigation needed:**
-- Check if `cast_kern()` macro is properly defined in `bpf_arena_common.h`
-- Verify the macro actually generates the right BPF bytecode
-- May need to use alternative validation approach (see below)
+### 3. Test Scripts Status
+✅ Test scripts exist:
+- `test_smoke.sh` - Basic validation tests
+- `test_stress.sh` - Heavy load tests  
+- `test_verify.sh` - Correctness checks
+- `benchmark.sh` - Performance measurements
 
-**Possible fixes:**
-1. Check `bpf_arena_common.h` for `cast_kern()` definition
-2. Try explicit barrier: `barrier_var(ds_head);`
-3. Try alternative initialization in userspace instead of kernel
-4. Look at how `arena_list` (the original example) handles this
-
-### 3. Create Test Scripts
-- [ ] Add MS Queue to `test_smoke.sh`
-- [ ] Add MS Queue to `test_stress.sh`
-- [ ] Add MS Queue to `test_verify.sh`
-- [ ] Update test documentation in README.md
+- [ ] Verify all test scripts work with current simplified implementation
+- [ ] Update test scripts to match new LSM-based execution model (no more -t, -o flags)
+- [ ] Add MS Queue to test scripts (when ready)
 
 ## Medium Priority - Code Quality
 
-### 4. Improve Error Handling
-- [ ] Add better error messages in skeleton programs
-- [ ] Handle edge cases in MS Queue (max retries exceeded, allocation failures)
-- [ ] Add timeout mechanisms for infinite retry loops
+### 4. Documentation
+✅ Core documentation complete:
+- `GUIDE.md` - Comprehensive framework guide
+- `README.md` - Quick reference
+- `QUICKSTART.md` - Beginner guide
+- `ARCHITECTURE_DIAGRAMS.md` - Visual reference
+- `PROJECT_SUMMARY.md` - Build summary
 
-### 5. Documentation
-- [ ] Add usage examples to README.md for MS Queue
-- [ ] Document performance characteristics vs linked list
-- [ ] Add architecture diagram showing MS Queue structure
-- [ ] Document the "helping" mechanism in MS Queue
+- [ ] Update all docs to reflect simplified LSM-based model (no statistics, no multi-threaded userspace)
+- [ ] Remove references to non-existent features (statistics tracking removed)
+- [ ] Add examples of the actual working skeleton program usage
+- [ ] Document MS Queue when ready
 
-### 6. Memory Reclamation Safety
-**Current:** Immediate `bpf_arena_free()` after dequeue
+### 5. Memory Reclamation Safety
+**Current:** Simple bump allocator - no actual freeing
 
-**Risk:** Potential use-after-free in high contention
+**Status:** Working approach for the framework's needs
+- Memory is reused when program restarts
+- No complex reclamation needed for current use case
+- `bpf_arena_free()` is a no-op placeholder
 
-**Options:**
-1. Implement epoch-based reclamation (heavyweight but safe)
-2. Add grace period before freeing
-3. Document the limitation and accept it for PoC
-4. Rely on BPF arena's built-in reference counting (current approach)
-
-**Recommendation:** For this framework, document the limitation. Arena reference counting provides reasonable protection.
+**Future:** If implementing true free(), consider:
+1. Epoch-based reclamation for lock-free structures
+2. Reference counting for shared nodes
+3. Grace periods before freeing
 
 ## Low Priority - Enhancements
 
-### 7. Add More Data Structures
+### 6. Add More Data Structures
 Following the same pattern:
-- [ ] Skip List (lock-free)
+- [ ] Complete MS Queue (lock-free FIFO)
+- [ ] Skip List (lock-free ordered)
 - [ ] Hash Table (concurrent)
 - [ ] B-Tree (for ordered data)
-- [ ] Trie (for string keys)
 
-### 8. Performance Monitoring
-- [ ] Add latency histograms (p50, p99, p999)
-- [ ] Add throughput metrics (ops/sec over time)
-- [ ] Add contention metrics (CAS retry counts)
-- [ ] Create visualization scripts for results
+### 7. Expand Testing Capabilities
+- [ ] Add configurable workload generator for userspace
+- [ ] Support for multi-threaded userspace operations (current is single-threaded reader)
+- [ ] More comprehensive verification functions
+- [ ] Memory usage tracking and leak detection
 
-### 9. Benchmarking Suite
-- [ ] Create standardized benchmark harness
-- [ ] Compare against userspace-only implementations
-- [ ] Measure kernel-userspace hybrid overhead
-- [ ] Generate performance comparison charts
+## Known Limitations (Not Bugs)
 
-## Known Issues
+### 1. No Statistics Tracking
+**Status:** Intentionally removed for simplicity
+**Reason:** Simplified the codebase by ~250 lines
+**Impact:** Can't measure per-operation timing or detailed metrics
+**Workaround:** Manual analysis of data structure state
 
-### Issue 1: cast_kern() Not Working
-**Symptom:** BPF verifier rejects skeleton.bpf.c with scalar access error
-**Status:** Needs investigation
-**Priority:** High - blocks testing of original skeleton
+### 2. Bump Allocator Only
+**Status:** Simple allocation strategy
+**Reason:** Avoids complex memory management
+**Impact:** Memory not truly freed until program restart
+**Workaround:** Acceptable for testing framework
 
-### Issue 2: Arena Stats Not Accessible from Userspace
-**Symptom:** Can't access `global_stats` via `skel->bss->`
-**Root Cause:** Arena variables aren't in BSS section
-**Status:** Documented and worked around (removed stats printing)
-**Priority:** Low - not critical for functionality
-
-### Issue 3: Config Variables Require Workaround
-**Symptom:** Can't write to config variables from userspace
-**Root Cause:** Was using `volatile const` (wrong section)
-**Status:** Fixed by removing assignments, using defaults
-**Alternative:** Could make them writable by removing const
-**Priority:** Low - defaults work fine
+### 3. Single-threaded Userspace Reader
+**Status:** By design in simplified model
+**Reason:** Focuses on kernel-side insertion testing
+**Impact:** Can't test heavy concurrent userspace operations
+**Workaround:** Can be extended if needed
 
 ## Notes for Future Implementations
 
-1. **Always add cast_kern() after taking address of arena globals**
-2. **Initialize all variables before use (especially in verify functions)**
-3. **Cast unused CAS results to (void) to document intent**
+1. **With clang-20, cast_kern()/cast_user() are NOPs** - LLVM handles address space casts automatically
+2. **Initialize all variables before use** (especially in verify functions)
+3. **Cast unused CAS results to (void)** to document intent
 4. **Add new programs to Makefile APPS list**
-5. **Test with both skeleton.c and skeleton_[name].c to ensure consistency**
-6. **Check for signed/unsigned comparison warnings**
-7. **Use __attribute__((unused)) for API-required but unused parameters**
+5. **Check for signed/unsigned comparison warnings**
+6. **Use __attribute__((unused))** for API-required but unused parameters
+7. **LSM hooks must return 0** to allow the operation to proceed
+8. **Bump allocator is simple but effective** for this use case
 
-## Questions to Investigate
+## Questions for Future Exploration
 
-1. Why does `cast_kern()` not work in skeleton.bpf.c initialization?
-2. Is there a better way to expose arena statistics to userspace?
-3. Should we implement explicit ABA counters or trust arena isolation?
-4. What's the optimal number of CAS retries before giving up?
-5. Can we make config variables runtime-configurable from userspace?
+1. Can we efficiently expose data structure state to userspace without complex IPC?
+2. Should we add support for multi-threaded userspace operations?
+3. What's the best way to trigger kernel operations reliably for testing?
+4. How to implement true memory freeing without complex reclamation schemes?

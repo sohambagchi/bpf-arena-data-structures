@@ -5,10 +5,10 @@
 ## What Does This Do?
 
 This framework lets you test **concurrent data structures** (like lists, trees, queues) where operations happen from:
-- **Multiple userspace threads** (via pthreads)
-- **Kernel-space BPF programs** (via syscall tracepoints)
+- **Kernel-space BPF programs** (via LSM hooks that trigger on file creation)
+- **Userspace programs** (direct arena memory access for reading)
 
-Both access the **same memory** (BPF arena) without copying data. Think of it as a shared whiteboard where both kernel and userspace can write simultaneously.
+Both access the **same memory** (BPF arena) without copying data. The kernel populates the data structure automatically when files are created, and userspace can read it directly.
 
 ## Prerequisites Check (2 minutes)
 
@@ -36,70 +36,72 @@ cd bpf_arena/
 make -f Makefile.new
 
 # Run a simple test (needs sudo for BPF)
-sudo ./skeleton -t 4 -o 1000
+sudo ./skeleton -d 5
 
 # You should see output like:
 #   Loading BPF program...
 #   BPF programs attached successfully
-#   Test Configuration: ...
-#   Starting 4 worker threads...
-#   All threads completed
-#   ============================================================
-#                       TEST STATISTICS
-#   ============================================================
+#   Sleeping for 5 seconds to allow kernel to populate data structure...
+#   Reading data structure...
+#   Element 0: pid=1234, last_ts=1234567890
 #   ...
+#   Total elements in list: 42
+#   ============================================================
+#                       STATISTICS
+#   ============================================================
 ```
 
 ## What Just Happened?
 
-1. **Compiled BPF program** → Runs in kernel, triggers on syscalls
-2. **Compiled userspace program** → Creates 4 threads
+1. **Compiled BPF program** → Runs in kernel, attached to LSM hook
+2. **Compiled userspace program** → Single-threaded reader
 3. **Created shared arena** → Both sides access same memory
-4. **Ran 4000 operations** → 4 threads × 1000 ops each
-5. **Printed statistics** → Throughput, failures, memory usage
+4. **Kernel populated list** → LSM hook triggers on file creations (inode_create)
+5. **Userspace read results** → Direct arena access, no syscalls needed
+6. **Printed statistics** → Element count, insert statistics
 
 ## Try Different Tests
 
 ```bash
-# More threads (8 instead of 4)
-sudo ./skeleton -t 8 -o 1000
-
-# Different workload (only insertions)
-sudo ./skeleton -t 4 -o 1000 -w insert
+# Sleep longer to collect more data
+sudo ./skeleton -d 30
 
 # Verify data structure integrity
-sudo ./skeleton -t 4 -o 1000 -v
+sudo ./skeleton -d 5 -v
 
-# Run all smoke tests
+# Just show statistics
+sudo ./skeleton -d 5 -s
+
+# Run all smoke tests (if available)
 sudo ./test_smoke.sh
 ```
 
 ## Understanding the Output
 
 ```
-Per-Thread Results:
-Thread   Operations    Inserts    Deletes   Searches  Failures      Ops/sec
---------------------------------------------------------------------
-0              1000        500        200        300         5       45231
+Reading data structure...
+  Element 0: pid=1234, last_ts=1234567890
+  Element 1: pid=1235, last_ts=1234567891
+  ...
+Total elements in list: 42
+
+============================================================
+                    STATISTICS
+============================================================
+
+Kernel-Side Operations (inode_create LSM hook inserts):
+  Total inserts:    42
+  Insert failures:  0
+
+Data Structure State:
+  Elements in list: 42
 ```
 
-- **Thread**: Thread ID (0, 1, 2, 3...)
-- **Operations**: Total ops performed by this thread
-- **Inserts/Deletes/Searches**: Breakdown by operation type
-- **Failures**: Operations that failed (e.g., delete non-existent key) - this is NORMAL
-- **Ops/sec**: Throughput (higher is better)
-
-```
-Arena Memory Statistics:
-  Allocations:      2144
-  Frees:            801
-  Current allocs:   1343
-```
-
-- **Allocations**: Total memory allocations from arena
-- **Frees**: Total deallocations
-- **Current allocs**: Active allocations (should ≈ final element count)
-- **Failed allocs**: Should be 0 (or something's wrong)
+- **pid**: Process ID that triggered the LSM hook
+- **last_ts**: Timestamp when the insertion occurred
+- **Total inserts**: Number of times the LSM hook fired and inserted data
+- **Insert failures**: Should be 0 (would indicate memory allocation issues)
+- **Elements in list**: Final count from data structure (should match total inserts)
 
 ## What's in the Box?
 
@@ -213,14 +215,14 @@ ls ../../third_party/libbpf/src/
 
 **Quick check**:
 ```bash
-# Run with just 1 thread to isolate
-sudo ./skeleton -t 1 -o 100
+# Run with short duration
+sudo ./skeleton -d 1
 
 # Check dmesg for kernel messages
 sudo dmesg | tail -50
 
 # Enable verbose build to see compiler output
-make -f Makefile.new clean && make -f Makefile.new V=1
+make clean && make V=1
 ```
 
 ## File Naming Conventions
@@ -254,15 +256,15 @@ vim skeleton.bpf.c  # Add includes and dispatch
 vim skeleton.c      # Update types and calls
 
 # 3. Build
-make -f Makefile.new clean && make -f Makefile.new
+make clean && make
 
 # 4. Quick test
-sudo ./skeleton -t 1 -o 100
+sudo ./skeleton -d 2
 
 # 5. Full test
-sudo ./skeleton -t 4 -o 1000 -v
+sudo ./skeleton -d 10 -v
 
-# 6. Automated tests
+# 6. Automated tests (update scripts for new model)
 sudo ./test_smoke.sh
 ```
 

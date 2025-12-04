@@ -18,12 +18,12 @@ This framework provides a testing infrastructure for **concurrent data structure
 
 ### Key Features
 
-- **Dual-context execution**: Operations can be performed from both kernel BPF programs and userspace threads
-- **Zero-copy access**: Userspace directly accesses arena memory without syscalls
+- **Kernel-driven population**: LSM hooks automatically insert data when files are created
+- **Zero-copy access**: Userspace directly accesses arena memory without syscalls  
 - **Lock-free primitives**: Built-in atomic operations for concurrent access
-- **Statistics tracking**: Comprehensive operation metrics from both contexts
 - **Verification support**: Data structure integrity checking
 - **Modular design**: Easy to add new data structures
+- **Simple execution model**: Kernel inserts, userspace reads
 
 ### Use Cases
 
@@ -160,14 +160,14 @@ make V=1
 ### Quick Test
 
 ```bash
-# Run the skeleton test with 4 threads, 1000 operations
-sudo ./skeleton -t 4 -o 1000
+# Run the skeleton test (5 second collection period)
+sudo ./skeleton -d 5
 
-# Run arena_list example
+# Run with verification
+sudo ./skeleton -d 5 -v
+
+# Run arena_list example (original reference)
 sudo ./arena_list 100
-
-# Run all smoke tests
-make test
 ```
 
 ---
@@ -370,11 +370,11 @@ struct worker_context {
 # Rebuild
 make clean && make
 
-# Test your new data structure
-sudo ./skeleton -t 4 -o 1000 -w mixed
+# Test your new data structure (kernel will populate via LSM)
+sudo ./skeleton -d 10
 
 # Verify integrity
-sudo ./skeleton -t 4 -o 1000 -v
+sudo ./skeleton -d 5 -v
 ```
 
 ---
@@ -384,17 +384,17 @@ sudo ./skeleton -t 4 -o 1000 -v
 ### Basic Testing
 
 ```bash
-# Simple test: 4 threads, 1000 operations each
-sudo ./skeleton -t 4 -o 1000
+# Simple test: collect data for 5 seconds
+sudo ./skeleton -d 5
 
-# Insert-only workload
-sudo ./skeleton -t 8 -o 5000 -w insert
-
-# Mixed workload with large key space
-sudo ./skeleton -t 4 -o 2000 -k 100000 -w mixed
+# Longer collection period
+sudo ./skeleton -d 30
 
 # With verification
-sudo ./skeleton -t 4 -o 1000 -v
+sudo ./skeleton -d 5 -v
+
+# With statistics output
+sudo ./skeleton -d 10 -s
 ```
 
 ### Command-Line Options
@@ -402,16 +402,17 @@ sudo ./skeleton -t 4 -o 1000 -v
 ```
 Usage: ./skeleton [OPTIONS]
 
+DESIGN:
+  Kernel:    LSM hook on inode_create inserts items (triggers on file creation)
+  Userspace: Single thread sleeps, then reads the data structure
+
 OPTIONS:
-  -t N    Number of userspace threads (default: 4)
-  -o N    Operations per thread (default: 1000)
-  -k N    Key range for operations (default: 10000)
-  -d N    Test duration in seconds (default: 10)
-  -w TYPE Workload type: insert, search, delete, mixed (default: mixed)
+  -d N    Sleep duration in seconds before reading (default: 5)
   -v      Verify data structure integrity
   -s      Print statistics (default: enabled)
-  -K      Trigger kernel operations via syscalls
   -h      Show help
+
+Note: Kernel inserts trigger automatically when files are created on the system.
 ```
 
 ### Automated Tests
@@ -430,42 +431,32 @@ make test-verify
 ### Understanding Test Output
 
 ```
+Reading data structure...
+  Element 0: pid=1234, last_ts=1234567890
+  Element 1: pid=1235, last_ts=1234567891
+  Element 2: pid=1236, last_ts=1234567892
+  ...
+  (showing first 10 elements)
+Total elements in list: 342
+
 ============================================================
-                    TEST STATISTICS                         
+                    STATISTICS
 ============================================================
 
-Per-Thread Results:
-Thread   Operations    Inserts    Deletes   Searches  Failures      Ops/sec
---------------------------------------------------------------------
-0              1000        500        200        300         5       45231
-1              1000        498        202        300         8       44892
-2              1000        502        198        300         3       45567
-3              1000        499        201        300         6       45123
---------------------------------------------------------------------
-TOTAL          4000       1999        801       1200        22      180813
-
-Kernel-Side Operations:
-  Total operations: 145
-  Total failures:   3
-
-Arena Memory Statistics:
-  Allocations:      2144
-  Frees:            801
-  Current allocs:   1343
-  Failed allocs:    0
+Kernel-Side Operations (inode_create LSM hook inserts):
+  Total inserts:    342
+  Insert failures:  0
 
 Data Structure State:
-  Elements in list: 1343
-
-Test Duration: 0.09 seconds
-============================================================
+  Elements in list: 342
 ```
 
 **Key Metrics**:
-- **Ops/sec**: Throughput per thread and total
-- **Failures**: Operations that didn't complete (e.g., key not found on delete)
-- **Kernel-Side Operations**: Count from BPF tracepoints
-- **Current allocs**: Memory still in use (should match element count)
+- **pid**: Process ID that triggered the LSM hook (from file creation)
+- **last_ts**: Timestamp when the insertion occurred
+- **Total inserts**: Number of times the LSM hook fired and inserted data
+- **Insert failures**: Should be 0 (indicates memory allocation issues if non-zero)
+- **Elements in list**: Final count from walking the data structure (should match total inserts)
 
 ---
 

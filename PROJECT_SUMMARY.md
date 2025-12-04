@@ -19,14 +19,13 @@ A complete, production-ready framework for testing concurrent data structures us
 **Purpose**: Arena memory management and synchronization primitives
 
 **Features**:
-- Per-CPU page fragment allocator
-- Statistics tracking (allocations, frees, failures)
+- Simple bump allocator (no fragmentation)
 - Atomic operations for concurrent access
 - Memory barriers and synchronization primitives
 - Dual implementation (BPF kernel / userspace)
-- Object tracking and leak detection
+- Minimal overhead design
 
-**Lines**: ~300 lines of annotated code
+**Lines**: ~70 lines (simplified from original 300)
 
 ---
 
@@ -54,15 +53,13 @@ A complete, production-ready framework for testing concurrent data structures us
 
 **Features**:
 - Full API implementation (init, insert, delete, search, verify)
-- Statistics tracking per operation
 - Safe iteration macros
 - Lock-free operations with atomics
 - Memory management with arena allocator
 - Integrity verification
-- Timing measurements
 - Works in both BPF and userspace contexts
 
-**Lines**: ~450 lines fully documented
+**Lines**: ~360 lines fully documented (simplified from original 450)
 
 ---
 
@@ -71,34 +68,31 @@ A complete, production-ready framework for testing concurrent data structures us
 
 **Features**:
 - Arena map definition (configurable size)
-- Syscall tracepoints (exec, exit)
-- Operation dispatch mechanism
-- Manual trigger programs (for testing)
-- Batch operation support
-- Statistics tracking
+- LSM hook on inode_create (triggers on file creation)
+- Direct insertion of (pid, timestamp) pairs
+- Sleepable context (allows arena allocation)
 - Verification support
 - Clear insertion points marked with `/* DS_API_INSERT */`
 
-**Lines**: ~300 lines
+**Lines**: ~170 lines (simplified from original 300)
 
 ---
 
 ### 5. Userspace Skeleton (`skeleton.c`)
-**Purpose**: Userspace test driver with pthread workers
+**Purpose**: Userspace reader program
 
 **Features**:
-- Pthread-based worker threads
-- Multiple workload types (insert, search, delete, mixed)
-- Configurable parameters (threads, operations, key range)
-- Pseudo-random key generation
-- Statistics collection and reporting
+- Single-threaded reader design
+- Direct arena memory access (zero-copy)
+- Configurable sleep duration
+- Data structure iteration and display
 - Verification support
-- Syscall trigger option (for kernel operations)
+- Statistics display
 - Signal handling
 - Command-line argument parsing
-- Comprehensive output formatting
+- Simple output formatting
 
-**Lines**: ~700 lines
+**Lines**: ~270 lines (simplified from original 700)
 
 ---
 
@@ -224,11 +218,11 @@ A complete, production-ready framework for testing concurrent data structures us
 
 ### For Users
 ✅ Complete testing framework ready to use  
-✅ Multiple workload types (insert, search, delete, mixed)  
-✅ Configurable concurrency (1-N threads)  
-✅ Real-time statistics and verification  
+✅ LSM-driven kernel data population (automatic on file creation)  
+✅ Direct userspace arena access (zero-copy reads)  
+✅ Data structure integrity verification  
+✅ Simple execution model (kernel writes, userspace reads)  
 ✅ Automated testing suite  
-✅ Performance benchmarking tools  
 
 ### For Developers
 ✅ Clear API template for adding data structures  
@@ -252,20 +246,20 @@ A complete, production-ready framework for testing concurrent data structures us
 
 ### Build
 ```bash
-make -f Makefile.new
+make
 ```
 
 ### Run
 ```bash
-sudo ./skeleton -t 4 -o 1000 -w mixed
+sudo ./skeleton -d 5      # Collect for 5 seconds
+sudo ./skeleton -d 10 -v  # With verification
 ```
 
 ### Test
 ```bash
 sudo ./test_smoke.sh      # Quick validation
-sudo ./test_stress.sh     # Stress testing
-sudo ./test_verify.sh     # Correctness checks
-sudo ./benchmark.sh       # Performance metrics
+sudo ./test_stress.sh     # Stress testing (update for new model)
+sudo ./test_verify.sh     # Correctness checks (update for new model)
 ```
 
 ### Add New Data Structure

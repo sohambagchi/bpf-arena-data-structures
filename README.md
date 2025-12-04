@@ -6,13 +6,13 @@ A comprehensive framework for testing concurrent data structures using **BPF are
 
 ```bash
 # Build everything
-make -f Makefile.new
+make
 
-# Run basic test (4 threads, 1000 operations)
-sudo ./skeleton -t 4 -o 1000
+# Run basic test
+sudo ./skeleton -d 5
 
-# Run all smoke tests
-sudo ./test_smoke.sh
+# Run with verification  
+sudo ./skeleton -d 5 -v
 
 # See comprehensive guide
 cat GUIDE.md
@@ -22,15 +22,15 @@ cat GUIDE.md
 
 ### Core Library Components
 
-- **`libarena_ds.h`** - Arena memory allocator with statistics tracking and atomic operations
+- **`libarena_ds.h`** - Simple bump allocator for arena memory
 - **`ds_api.h`** - Standard API template for data structure implementations
 - **`bpf_arena_common.h`** - Common definitions for BPF/userspace compatibility
 - **`bpf_experimental.h`** - BPF experimental features
 
 ### Test Framework
 
-- **`skeleton.bpf.c`** - Kernel-side BPF program with syscall tracepoints
-- **`skeleton.c`** - Userspace test driver with pthread workers
+- **`skeleton.bpf.c`** - Kernel-side BPF program with LSM hooks
+- **`skeleton.c`** - Userspace reader program
 - **`ds_list.h`** - Reference implementation (doubly-linked list)
 
 ### Testing Infrastructure
@@ -62,8 +62,8 @@ cat GUIDE.md
 │  Accessible from both contexts          │
 ├─────────────────────────────────────────┤
 │         KERNEL SPACE                    │
-│  BPF programs via syscall tracepoints   │
-│  Operations triggered by exec/exit      │
+│  BPF programs via LSM hooks             │
+│  Operations triggered by file creation  │
 └─────────────────────────────────────────┘
 ```
 
@@ -72,14 +72,14 @@ cat GUIDE.md
 ### Basic Testing
 
 ```bash
-# 4 threads, 1000 operations each, mixed workload
-sudo ./skeleton -t 4 -o 1000 -w mixed
+# Run for 10 seconds, then read results
+sudo ./skeleton -d 10
 
-# 8 threads, insert-only workload
-sudo ./skeleton -t 8 -o 5000 -w insert
+# Run for 5 seconds with data structure verification
+sudo ./skeleton -d 5 -v
 
-# With verification
-sudo ./skeleton -t 4 -o 1000 -v
+# Run with statistics output (enabled by default)
+sudo ./skeleton -d 5 -s
 ```
 
 ### Automated Testing
@@ -103,14 +103,15 @@ sudo ./benchmark.sh
 ```
 ./skeleton [OPTIONS]
 
-  -t N    Number of userspace threads (default: 4)
-  -o N    Operations per thread (default: 1000)
-  -k N    Key range for operations (default: 10000)
-  -w TYPE Workload: insert, search, delete, mixed (default: mixed)
+DESIGN:
+  Kernel:    LSM hook on inode_create inserts items
+  Userspace: Single thread sleeps, then reads data structure
+
+OPTIONS:
+  -d N    Sleep duration in seconds before reading (default: 5)
   -v      Verify data structure integrity
-  -s      Print statistics
-  -K      Trigger kernel operations via syscalls
-  -h      Show help
+  -s      Print statistics (default: enabled)
+  -h      Show this help
 ```
 
 ## 📦 Requirements
@@ -182,8 +183,8 @@ Look for `/* DS_API_INSERT */` markers and add:
 ### 4. Build and Test
 
 ```bash
-make -f Makefile.new clean && make -f Makefile.new
-sudo ./skeleton -t 4 -o 1000 -v
+make clean && make
+sudo ./skeleton -d 5 -v
 ```
 
 **See `GUIDE.md` for detailed step-by-step instructions.**
@@ -192,35 +193,29 @@ sudo ./skeleton -t 4 -o 1000 -v
 
 ```
 ============================================================
-                    TEST STATISTICS                         
+                    STATISTICS                              
 ============================================================
 
-Per-Thread Results:
-Thread   Operations    Inserts    Deletes   Searches  Failures      Ops/sec
---------------------------------------------------------------------
-0              1000        500        200        300         5       45231
-1              1000        498        202        300         8       44892
-...
---------------------------------------------------------------------
-TOTAL          4000       1999        801       1200        22      180813
+Kernel-Side Operations (inode_create LSM hook inserts):
+  Total inserts:    342
+  Insert failures:  0
 
-Kernel-Side Operations:
-  Total operations: 145
-  Total failures:   3
-
-Arena Memory Statistics:
-  Allocations:      2144
-  Frees:            801
-  Current allocs:   1343
-  Failed allocs:    0
+Data Structure State:
+  Elements in list: 342
 ```
 
 ### Key Metrics
 
-- **Ops/sec**: Throughput (higher is better)
-- **Failures**: Expected for operations like delete/search on non-existent keys
-- **Current allocs**: Should approximately match final element count
-- **Failed allocs**: Should be 0 or very low
+- **Total inserts**: Number of items inserted by kernel LSM hook
+- **Insert failures**: Should be 0 (or indicates memory issues)
+- **Elements in list**: Final count in data structure (should match total inserts)
+
+### How It Works
+
+1. Kernel LSM hook on `inode_create` triggers on file creation
+2. Each trigger inserts process ID and timestamp into the list
+3. Userspace sleeps for specified duration while kernel populates
+4. After sleep, userspace reads and displays the data structure contents
 
 ## 📁 File Structure
 
@@ -231,9 +226,9 @@ bpf_arena/
 ├── ds_list.h               # Example: linked list ⭐
 ├── skeleton.bpf.c          # Kernel-side driver ⭐
 ├── skeleton.c              # Userspace driver ⭐
-├── Makefile.new            # Build system ⭐
+├── Makefile                # Build system ⭐
 ├── GUIDE.md                # Comprehensive guide ⭐
-├── README_FRAMEWORK.md     # This file
+├── README.md               # This file
 ├── test_smoke.sh           # Smoke tests
 ├── test_stress.sh          # Stress tests
 ├── test_verify.sh          # Verification tests

@@ -170,32 +170,26 @@ These files are kept as reference examples:
 
 ### Build
 ```bash
-make -f Makefile.new              # Build all
-make -f Makefile.new skeleton     # Build skeleton only
-make -f Makefile.new clean        # Clean build
-make -f Makefile.new V=1          # Verbose build
-make -f Makefile.new help         # Show help
+make              # Build all
+make skeleton     # Build skeleton only
+make clean        # Clean build
+make V=1          # Verbose build
+make help         # Show help
 ```
 
 ### Run
 ```bash
-# Basic usage
-sudo ./skeleton -t 4 -o 1000
+# Basic usage (sleep 5 seconds while kernel populates)
+sudo ./skeleton -d 5
 
-# Workload types
-sudo ./skeleton -t 4 -o 1000 -w insert
-sudo ./skeleton -t 4 -o 1000 -w search
-sudo ./skeleton -t 4 -o 1000 -w delete
-sudo ./skeleton -t 4 -o 1000 -w mixed
+# Longer collection period
+sudo ./skeleton -d 30
 
 # With verification
-sudo ./skeleton -t 4 -o 1000 -v
+sudo ./skeleton -d 5 -v
 
-# Large key space (less contention)
-sudo ./skeleton -t 4 -o 1000 -k 100000
-
-# Small key space (more contention)
-sudo ./skeleton -t 4 -o 1000 -k 100
+# With statistics
+sudo ./skeleton -d 10 -s
 ```
 
 ### Test
