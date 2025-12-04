@@ -64,10 +64,10 @@ static volatile bool stop_test = false;
 /* Iteration callback */
 static __u64 print_count = 0;
 
-// static int print_element_callback(__u64 key, struct ds_element value, void *ctx __attribute__((unused)))
 static int print_element_callback(__u64 key, __u64 value, void *ctx __attribute__((unused)))
 {
-	printf("  Element %llu: key=%llu, value=%llu\n", print_count, key, value);
+	cast_user(comm);
+	printf("  Element %llu: pid=%llu, last_ts=%llu\n", print_count, key, value);
 	print_count++;
 	
 	/* Stop after 10 elements */
@@ -80,11 +80,13 @@ static int print_element_callback(__u64 key, __u64 value, void *ctx __attribute_
 /**
  * read_data_structure - Sleep then read the data structure
  */
-static void read_data_structure(struct ds_list_head *head)
+static void read_data_structure()
 {
 	printf("Sleeping for %d seconds to allow kernel to populate data structure...\n", config.sleep_seconds);
 	sleep(config.sleep_seconds);
 	
+	struct ds_list_head *head = skel->bss->ds_head;
+
 	if (!head) {
 		printf("Data structure not yet initialized\n");
 		return;
@@ -245,10 +247,10 @@ int main(int argc, char **argv)
 	
 	printf("BPF programs attached successfully\n");
 	printf("Data structure will be lazily initialized on first LSM hook trigger\n");
-	printf("Kernel inserts triggered automatically on program execution (execve)\n\n");
+	printf("Kernel inserts triggered automatically on file creation (inode_create)\n\n");
 	
 	/* Read the data structure after sleeping */
-	read_data_structure(skel->bss->ds_head);
+	read_data_structure();
 	
 	/* Print statistics */
 	if (config.print_stats) {

@@ -136,44 +136,18 @@ static __always_inline int handle_operation(struct ds_operation *op)
  * Can safely call bpf_arena_alloc_pages() ✓
  */
 SEC("lsm.s/inode_create")
-// int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t mode)
-int BPF_PROG(lsm_inode_create, struct dentry *dentry, struct inode *dir, umode_t mode)
+int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	int result;
 	ds_head = &global_ds_head;
 	
-	// // /* Lazy initialization on first call */
-	// if (!initialized) {
-	// 	ds_head = &global_ds_head;
-	// 	cast_kern(ds_head);
-	// 	result = ds_list_init(ds_head);
-	// 	if (result != DS_SUCCESS)
-	// 		return 0;
-	// 	initialized = true;
-	// }
-	
-	__u64 key;
-	int pid;
-	// char comm[16];
-	// char path[64];
-
-	// struct ds_element e = {0};
+	__u64 pid;
+	__u64 ts;
 
 	pid = bpf_get_current_pid_tgid() >> 32;
-	// bpf_get_current_comm(&e.comm, sizeof(e.comm));
-	
-	// if (dentry) {
-	// 	struct dentry *parent = BPF_CORE_READ(dentry, d_parent);
-	// 	if (parent) {
-	// 		const unsigned char *dir_name_ptr = BPF_CORE_READ(parent, d_name.name);
-	// 		if (dir_name_ptr) {
-	// 			bpf_probe_read_kernel_str(&e.path, sizeof(e.path), dir_name_ptr);
-	// 		}
-	// 	}
-	// }
 
-	key = bpf_ktime_get_ns();
-	result = ds_list_insert(ds_head, key, (__u64)pid);
+	ts = bpf_ktime_get_ns();
+	result = ds_list_insert(ds_head, pid, ts);
 	
 	/* Update statistics */
 	total_kernel_ops++;

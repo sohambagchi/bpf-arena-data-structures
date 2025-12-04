@@ -86,12 +86,6 @@ struct ds_stats {
 	__u64 memory_used;            /* Bytes of arena memory used */
 };
 
-struct ds_element {
-	__u32 pid;
-	char comm[16];
-	char path[64];
-};
-
 /* ========================================================================
  * STANDARD API INTERFACE DEFINITION
  * ======================================================================== */
@@ -184,9 +178,8 @@ struct ds_element {
  */
 struct ds_operation {
 	enum ds_op_type type;
-	__u64 key;             /* For latency measurement */
-	__u64 value;
-	// struct ds_element value; /* Element data for insert/search */
+	__u64 key;             /* pid */
+	__u64 value;           /* timestamp */
 
 	int result;                  /* Operation result */
 };

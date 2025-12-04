@@ -42,9 +42,8 @@ typedef struct ds_list_head __arena ds_list_head_t;
 
 struct ds_list_elem {
 	struct ds_list_node node;
-	__u64 key; // timestamp
-	__u64 value;
-	// struct ds_element value;
+	__u64 key; // pid
+	__u64 value; // timestamp
 };
 
 /* ========================================================================
@@ -161,42 +160,6 @@ static inline int ds_list_init(struct ds_list_head __arena *head)
  * 
  * Returns: DS_SUCCESS on success, DS_ERROR_NOMEM if allocation fails
  */
-// static inline int ds_list_insert(struct ds_list_head __arena *head, __u64 key, const struct ds_element *value)
-// {
-// 	struct ds_list_elem __arena *n;
-	
-// 	if (!head)
-// 		return DS_ERROR_INVALID;
-	
-// 	/* Check if key already exists */
-// 	list_for_each_entry(n, head, node) {
-// 		cast_kern(n);
-// 		if (n->key == key) {
-// 			/* Key exists - update value */
-// 			n->value.pid = value->pid;
-// 			__builtin_memcpy(n->value.comm, value->comm, sizeof(n->value.comm));
-// 			__builtin_memcpy(n->value.path, value->path, sizeof(n->value.path));
-// 			return DS_SUCCESS;
-// 		}
-// 	}
-	
-// 	/* Allocate new node - returns __arena pointer */
-// 	struct ds_list_elem __arena *new_node = bpf_arena_alloc(sizeof(*new_node));
-// 	if (!new_node)
-// 		return DS_ERROR_NOMEM;
-	
-// 	/* Initialize node - NO cast_kern needed with clang-20 */
-// 	new_node->key = key;
-// 	new_node->value.pid = value->pid;
-// 	__builtin_memcpy(new_node->value.comm, value->comm, sizeof(new_node->value.comm));
-// 	__builtin_memcpy(new_node->value.path, value->path, sizeof(new_node->value.path));
-// 	/* Add to head of list */
-// 	__list_add_head(new_node, head);
-// 	head->count++;
-	
-// 	return DS_SUCCESS;
-// }
-
 static inline int ds_list_insert(struct ds_list_head __arena *head, __u64 key, __u64 value)
 {
 	struct ds_list_elem __arena *n;
@@ -210,6 +173,7 @@ static inline int ds_list_insert(struct ds_list_head __arena *head, __u64 key, _
 		if (n->key == key) {
 			/* Key exists - update value */
 			n->value = value;
+
 			return DS_SUCCESS;
 		}
 	}
@@ -218,10 +182,11 @@ static inline int ds_list_insert(struct ds_list_head __arena *head, __u64 key, _
 	struct ds_list_elem __arena *new_node = bpf_arena_alloc(sizeof(*new_node));
 	if (!new_node)
 		return DS_ERROR_NOMEM;
-	
+
 	/* Initialize node - NO cast_kern needed with clang-20 */
 	new_node->key = key;
 	new_node->value = value;
+
 	/* Add to head of list */
 	__list_add_head(new_node, head);
 	head->count++;
@@ -266,23 +231,6 @@ static inline int ds_list_delete(struct ds_list_head __arena *head, __u64 key)
  * 
  * Returns: DS_SUCCESS if found, DS_ERROR_NOT_FOUND otherwise
  */
-// static inline int ds_list_search(struct ds_list_head __arena *head, const char *target_dir)
-// {
-// 	struct ds_list_elem __arena *n;
-	
-// 	if (!head || !target_dir)
-// 		return DS_ERROR_INVALID;
-	
-// 	/* Search for key */
-// 	list_for_each_entry(n, head, node) {
-// 		cast_kern(n);
-// 		if (__builtin_strncmp(n->value.path, target_dir, sizeof(n->value.path)) == 0) {
-// 			return DS_SUCCESS;
-// 		}
-// 	}
-	
-// 	return DS_ERROR_NOT_FOUND;
-// }
 static inline int ds_list_search(struct ds_list_head __arena *head, __u64 key)
 {
 	struct ds_list_elem __arena *n;
@@ -378,7 +326,6 @@ static inline const struct ds_metadata* ds_list_get_metadata(void)
  * Returns: Number of elements visited
  */
 typedef int (*ds_list_iter_fn)(__u64 key, __u64 value, void *ctx);
-// typedef int (*ds_list_iter_fn)(__u64 key, struct ds_element value, void *ctx);
 
 static inline __u64 ds_list_iterate(struct ds_list_head __arena *head,
                                      ds_list_iter_fn fn,
