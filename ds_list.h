@@ -13,6 +13,10 @@
  * DATA STRUCTURES
  * ======================================================================== */
 
+struct ds_list_node;
+
+typedef struct ds_list_node __arena ds_list_node_t;
+
 /**
  * struct ds_list_node - Node in the doubly-linked list
  * @next: Pointer to next node
@@ -21,22 +25,26 @@
  * @value: Value stored in this element
  */
 struct ds_list_node {
-	struct ds_list_node __arena *next;
-	struct ds_list_node __arena * __arena *pprev;
-	__u64 key;
-	__u64 value;
+	ds_list_node_t *next;
+	ds_list_node_t * __arena *pprev;
 };
 
 /**
  * struct ds_list_head - Head of the doubly-linked list
- * @first: Pointer to first node
+ * @first: Pointer to first element
  * @count: Number of elements in the list
- * @stats: Operation statistics
  */
 struct ds_list_head {
-	struct ds_list_node __arena *first;
+	struct ds_list_elem __arena *first;
 	__u64 count;
-	struct ds_stats stats;
+};
+typedef struct ds_list_head __arena ds_list_head_t;
+
+struct ds_list_elem {
+	struct ds_list_node node;
+	__u64 key; // timestamp
+	__u64 value;
+	// struct ds_element value;
 };
 
 /* ========================================================================
@@ -54,59 +62,65 @@ struct ds_list_head {
  * list_for_each_entry - Iterate over list entries
  * @pos: Iterator variable
  * @head: List head
+ * @member: Member name of the list_node in the struct
  * 
  * Safe for deletion during iteration.
  */
-#define list_for_each_entry(pos, head)						\
+#define list_for_each_entry(pos, head, member)					\
 	for (void * ___tmp = (pos = list_entry_safe((head)->first,		\
-						    typeof(*(pos)), node),	\
+						    typeof(*(pos)), member),	\
 			      (void *)0);					\
-	     pos && ({ ___tmp = (void *)pos->next; 1; }) && can_loop;		\
-	     pos = list_entry_safe((void __arena *)___tmp, typeof(*(pos)), node))
+	     pos && ({ ___tmp = (void *)pos->member.next; 1; }) && can_loop;    \
+	     pos = list_entry_safe((void __arena *)___tmp, typeof(*(pos)), member))
 
 /* ========================================================================
  * INTERNAL HELPERS
  * ======================================================================== */
 
 /**
- * __list_add_head - Add node to head of list (internal)
+ * __list_add_head - Add element to head of list (internal)
  */
-static inline void __list_add_head(struct ds_list_node __arena *n,
-                                    struct ds_list_head __arena *h)
+static inline void __list_add_head(struct ds_list_elem __arena *elem,
+                                   struct ds_list_head __arena *h)
 {
-	struct ds_list_node __arena *first = h->first;
+	struct ds_list_elem __arena *first = h->first;
 	struct ds_list_node __arena * __arena *tmp;
+	ds_list_node_t *n = &elem->node;
 
 	cast_user(first);
 	cast_kern(n);
-	WRITE_ONCE(n->next, first);
+	if (first)
+		WRITE_ONCE(n->next, &first->node);
+	else
+		WRITE_ONCE(n->next, NULL);
 	cast_kern(first);
 	if (first) {
 		tmp = &n->next;
 		cast_user(tmp);
-		WRITE_ONCE(first->pprev, tmp);
+		WRITE_ONCE(first->node.pprev, tmp);
 	}
-	cast_user(n);
-	WRITE_ONCE(h->first, n);
-
+	cast_user(elem);
+	WRITE_ONCE(h->first, elem);
+	tmp = (struct ds_list_node __arena * __arena *)&h->first;
+	cast_user(tmp);
 	cast_kern(n);
-	n->pprev = &h->first;
+	WRITE_ONCE(n->pprev, tmp);
 }
 
 /**
  * __list_del - Delete node from list (internal)
  */
-static inline void __list_del(struct ds_list_node __arena *n)
+static inline void __list_del(ds_list_node_t *n)
 {
-	struct ds_list_node __arena *next = n->next;
-	struct ds_list_node __arena *tmp;
-	struct ds_list_node __arena * __arena *pprev = n->pprev;
+	ds_list_node_t *next = n->next;
+	ds_list_node_t **tmp_ptr;
+	ds_list_node_t * __arena *pprev = n->pprev;
 
 	cast_user(next);
 	cast_kern(pprev);
-	tmp = *pprev;
-	cast_kern(tmp);
-	WRITE_ONCE(tmp, next);
+	tmp_ptr = (ds_list_node_t **)pprev;
+	cast_kern(tmp_ptr);
+	WRITE_ONCE(*tmp_ptr, next);
 	if (next) {
 		cast_user(pprev);
 		cast_kern(next);
@@ -126,21 +140,13 @@ static inline void __list_del(struct ds_list_node __arena *n)
  */
 static inline int ds_list_init(struct ds_list_head __arena *head)
 {
+	cast_kern(head);
 	if (!head)
 		return DS_ERROR_INVALID;
 	
+	// cast_kern(head);
 	head->first = NULL;
 	head->count = 0;
-	
-	/* Initialize statistics */
-	for (int i = 0; i < DS_OP_MAX; i++) {
-		head->stats.ops[i].count = 0;
-		head->stats.ops[i].failures = 0;
-		head->stats.ops[i].total_time_ns = 0;
-	}
-	head->stats.current_elements = 0;
-	head->stats.max_elements = 0;
-	head->stats.memory_used = 0;
 	
 	return DS_SUCCESS;
 }
@@ -155,66 +161,70 @@ static inline int ds_list_init(struct ds_list_head __arena *head)
  * 
  * Returns: DS_SUCCESS on success, DS_ERROR_NOMEM if allocation fails
  */
+// static inline int ds_list_insert(struct ds_list_head __arena *head, __u64 key, const struct ds_element *value)
+// {
+// 	struct ds_list_elem __arena *n;
+	
+// 	if (!head)
+// 		return DS_ERROR_INVALID;
+	
+// 	/* Check if key already exists */
+// 	list_for_each_entry(n, head, node) {
+// 		cast_kern(n);
+// 		if (n->key == key) {
+// 			/* Key exists - update value */
+// 			n->value.pid = value->pid;
+// 			__builtin_memcpy(n->value.comm, value->comm, sizeof(n->value.comm));
+// 			__builtin_memcpy(n->value.path, value->path, sizeof(n->value.path));
+// 			return DS_SUCCESS;
+// 		}
+// 	}
+	
+// 	/* Allocate new node - returns __arena pointer */
+// 	struct ds_list_elem __arena *new_node = bpf_arena_alloc(sizeof(*new_node));
+// 	if (!new_node)
+// 		return DS_ERROR_NOMEM;
+	
+// 	/* Initialize node - NO cast_kern needed with clang-20 */
+// 	new_node->key = key;
+// 	new_node->value.pid = value->pid;
+// 	__builtin_memcpy(new_node->value.comm, value->comm, sizeof(new_node->value.comm));
+// 	__builtin_memcpy(new_node->value.path, value->path, sizeof(new_node->value.path));
+// 	/* Add to head of list */
+// 	__list_add_head(new_node, head);
+// 	head->count++;
+	
+// 	return DS_SUCCESS;
+// }
+
 static inline int ds_list_insert(struct ds_list_head __arena *head, __u64 key, __u64 value)
 {
-	struct ds_list_node __arena *n, *new_node;
-	__u64 start_time = 0;
+	struct ds_list_elem __arena *n;
 	
-#ifndef __BPF__
-	start_time = ds_get_timestamp();
-#else
-	start_time = bpf_ktime_get_ns();
-#endif
-	
-	if (!head) {
-		head->stats.ops[DS_OP_INSERT].failures++;
-		return DS_ERROR_INVALID;
-	}
+	if (!head)
+		ds_list_init(head);
 	
 	/* Check if key already exists */
-	n = head->first;
-	while (n && can_loop) {
+	list_for_each_entry(n, head, node) {
 		cast_kern(n);
 		if (n->key == key) {
-			/* Update existing value */
+			/* Key exists - update value */
 			n->value = value;
-			head->stats.ops[DS_OP_INSERT].count++;
 			return DS_SUCCESS;
 		}
-		n = n->next;
 	}
 	
-	/* Allocate new node */
-	new_node = bpf_arena_alloc(sizeof(*new_node));
-	if (!new_node) {
-		head->stats.ops[DS_OP_INSERT].failures++;
+	/* Allocate new node - returns __arena pointer */
+	struct ds_list_elem __arena *new_node = bpf_arena_alloc(sizeof(*new_node));
+	if (!new_node)
 		return DS_ERROR_NOMEM;
-	}
 	
-	/* Initialize node */
-	cast_kern(new_node);
+	/* Initialize node - NO cast_kern needed with clang-20 */
 	new_node->key = key;
 	new_node->value = value;
-	new_node->next = NULL;
-	new_node->pprev = NULL;
-	
 	/* Add to head of list */
 	__list_add_head(new_node, head);
 	head->count++;
-	
-	/* Update statistics */
-	head->stats.ops[DS_OP_INSERT].count++;
-	head->stats.current_elements++;
-	if (head->stats.current_elements > head->stats.max_elements)
-		head->stats.max_elements = head->stats.current_elements;
-	head->stats.memory_used += sizeof(*new_node);
-	
-#ifndef __BPF__
-	__u64 end_time = ds_get_timestamp();
-#else
-	__u64 end_time = bpf_ktime_get_ns();
-#endif
-	head->stats.ops[DS_OP_INSERT].total_time_ns += (end_time - start_time);
 	
 	return DS_SUCCESS;
 }
@@ -228,48 +238,23 @@ static inline int ds_list_insert(struct ds_list_head __arena *head, __u64 key, _
  */
 static inline int ds_list_delete(struct ds_list_head __arena *head, __u64 key)
 {
-	struct ds_list_node __arena *n;
-	__u64 start_time = 0;
+	struct ds_list_elem __arena *n;
 	
-#ifndef __BPF__
-	start_time = ds_get_timestamp();
-#else
-	start_time = bpf_ktime_get_ns();
-#endif
-	
-	if (!head) {
+	if (!head)
 		return DS_ERROR_INVALID;
-	}
 	
 	/* Search for key */
-	n = head->first;
-	while (n && can_loop) {
+	list_for_each_entry(n, head, node) {
 		cast_kern(n);
 		if (n->key == key) {
 			/* Found it - delete */
-			__list_del(n);
+			__list_del(&n->node);
 			bpf_arena_free(n);
 			head->count--;
-			
-			/* Update statistics */
-			head->stats.ops[DS_OP_DELETE].count++;
-			head->stats.current_elements--;
-			head->stats.memory_used -= sizeof(*n);
-			
-#ifndef __BPF__
-			__u64 end_time = ds_get_timestamp();
-#else
-			__u64 end_time = bpf_ktime_get_ns();
-#endif
-			head->stats.ops[DS_OP_DELETE].total_time_ns += (end_time - start_time);
-			
 			return DS_SUCCESS;
 		}
-		n = n->next;
 	}
 	
-	/* Not found */
-	head->stats.ops[DS_OP_DELETE].failures++;
 	return DS_ERROR_NOT_FOUND;
 }
 
@@ -281,45 +266,38 @@ static inline int ds_list_delete(struct ds_list_head __arena *head, __u64 key)
  * 
  * Returns: DS_SUCCESS if found, DS_ERROR_NOT_FOUND otherwise
  */
-static inline int ds_list_search(struct ds_list_head __arena *head, __u64 key, __u64 *value)
+// static inline int ds_list_search(struct ds_list_head __arena *head, const char *target_dir)
+// {
+// 	struct ds_list_elem __arena *n;
+	
+// 	if (!head || !target_dir)
+// 		return DS_ERROR_INVALID;
+	
+// 	/* Search for key */
+// 	list_for_each_entry(n, head, node) {
+// 		cast_kern(n);
+// 		if (__builtin_strncmp(n->value.path, target_dir, sizeof(n->value.path)) == 0) {
+// 			return DS_SUCCESS;
+// 		}
+// 	}
+	
+// 	return DS_ERROR_NOT_FOUND;
+// }
+static inline int ds_list_search(struct ds_list_head __arena *head, __u64 key)
 {
-	struct ds_list_node __arena *n;
-	__u64 start_time = 0;
+	struct ds_list_elem __arena *n;
 	
-#ifndef __BPF__
-	start_time = ds_get_timestamp();
-#else
-	start_time = bpf_ktime_get_ns();
-#endif
-	
-	if (!head || !value) {
-		if (head)
-			head->stats.ops[DS_OP_SEARCH].failures++;
+	if (!head)
 		return DS_ERROR_INVALID;
-	}
 	
 	/* Search for key */
-	n = head->first;
-	while (n && can_loop) {
+	list_for_each_entry(n, head, node) {
 		cast_kern(n);
 		if (n->key == key) {
-			*value = n->value;
-			head->stats.ops[DS_OP_SEARCH].count++;
-			
-#ifndef __BPF__
-			__u64 end_time = ds_get_timestamp();
-#else
-			__u64 end_time = bpf_ktime_get_ns();
-#endif
-			head->stats.ops[DS_OP_SEARCH].total_time_ns += (end_time - start_time);
-			
 			return DS_SUCCESS;
 		}
-		n = n->next;
 	}
 	
-	/* Not found */
-	head->stats.ops[DS_OP_SEARCH].failures++;
 	return DS_ERROR_NOT_FOUND;
 }
 
@@ -336,8 +314,8 @@ static inline int ds_list_search(struct ds_list_head __arena *head, __u64 key, _
  */
 static inline int ds_list_verify(struct ds_list_head __arena *head)
 {
-	struct ds_list_node __arena *n;
-	struct ds_list_node __arena * __arena *expected_pprev = &head->first;
+	struct ds_list_elem __arena *elem;
+	struct ds_list_node __arena * __arena *expected_pprev = (struct ds_list_node __arena * __arena *)&head->first;
 	__u64 count = 0;
 	__u64 max_iterations = 100000; /* Prevent infinite loops */
 	
@@ -345,74 +323,27 @@ static inline int ds_list_verify(struct ds_list_head __arena *head)
 		return DS_ERROR_INVALID;
 	
 	cast_kern(head);
-	n = head->first;
 	
-	while (n && count < max_iterations && can_loop) {
-		cast_kern(n);
+	list_for_each_entry(elem, head, node) {
+		cast_kern(elem);
 		count++;
 		
 		/* Check pprev pointer */
-		if (n->pprev != expected_pprev) {
-			head->stats.ops[DS_OP_VERIFY].failures++;
+		if (elem->node.pprev != expected_pprev)
 			return DS_ERROR_CORRUPT;
-		}
 		
-		expected_pprev = &n->next;
-		n = n->next;
+		/* Prevent infinite loops */
+		if (count >= max_iterations)
+			return DS_ERROR_CORRUPT;
+		
+		expected_pprev = &elem->node.next;
 	}
 	
 	/* Check count */
-	if (count != head->count) {
-		head->stats.ops[DS_OP_VERIFY].failures++;
+	if (count != head->count)
 		return DS_ERROR_CORRUPT;
-	}
 	
-	/* Check for cycle (if we hit max_iterations) */
-	if (count >= max_iterations && n != NULL) {
-		head->stats.ops[DS_OP_VERIFY].failures++;
-		return DS_ERROR_CORRUPT;
-	}
-	
-	head->stats.ops[DS_OP_VERIFY].count++;
 	return DS_SUCCESS;
-}
-
-/**
- * ds_list_get_stats - Get operation statistics
- * @head: List head
- * @stats: Output parameter for statistics
- */
-static inline void ds_list_get_stats(struct ds_list_head __arena *head, struct ds_stats *stats)
-{
-	if (!head || !stats)
-		return;
-	
-	/* Copy statistics */
-	for (int i = 0; i < DS_OP_MAX; i++) {
-		stats->ops[i].count = head->stats.ops[i].count;
-		stats->ops[i].failures = head->stats.ops[i].failures;
-		stats->ops[i].total_time_ns = head->stats.ops[i].total_time_ns;
-	}
-	
-	stats->current_elements = head->stats.current_elements;
-	stats->max_elements = head->stats.max_elements;
-	stats->memory_used = head->stats.memory_used;
-}
-
-/**
- * ds_list_reset_stats - Reset operation statistics
- * @head: List head
- */
-static inline void ds_list_reset_stats(struct ds_list_head __arena *head)
-{
-	if (!head)
-		return;
-	
-	for (int i = 0; i < DS_OP_MAX; i++) {
-		head->stats.ops[i].count = 0;
-		head->stats.ops[i].failures = 0;
-		head->stats.ops[i].total_time_ns = 0;
-	}
 }
 
 /**
@@ -447,29 +378,27 @@ static inline const struct ds_metadata* ds_list_get_metadata(void)
  * Returns: Number of elements visited
  */
 typedef int (*ds_list_iter_fn)(__u64 key, __u64 value, void *ctx);
+// typedef int (*ds_list_iter_fn)(__u64 key, struct ds_element value, void *ctx);
 
 static inline __u64 ds_list_iterate(struct ds_list_head __arena *head,
                                      ds_list_iter_fn fn,
                                      void *ctx)
 {
-	struct ds_list_node __arena *n;
+	struct ds_list_elem __arena *elem;
 	__u64 count = 0;
 	
 	if (!head || !fn)
 		return 0;
 	
-	n = head->first;
-	while (n && can_loop) {
-		cast_kern(n);
+	list_for_each_entry(elem, head, node) {
+		cast_kern(elem);
 		
-		int ret = fn(n->key, n->value, ctx);
+		int ret = fn(elem->key, elem->value, ctx);
 		if (ret != 0)
 			break;
 		
 		count++;
-		n = n->next;
 	}
 	
-	head->stats.ops[DS_OP_ITERATE].count++;
 	return count;
 }

@@ -86,6 +86,12 @@ struct ds_stats {
 	__u64 memory_used;            /* Bytes of arena memory used */
 };
 
+struct ds_element {
+	__u32 pid;
+	char comm[16];
+	char path[64];
+};
+
 /* ========================================================================
  * STANDARD API INTERFACE DEFINITION
  * ======================================================================== */
@@ -113,11 +119,14 @@ struct ds_stats {
 	static inline int ds_##name##_init(ds_##name##_head_t *head); \
 	static inline int ds_##name##_insert(ds_##name##_head_t *head, __u64 key, __u64 value); \
 	static inline int ds_##name##_delete(ds_##name##_head_t *head, __u64 key); \
-	static inline int ds_##name##_search(ds_##name##_head_t *head, __u64 key, __u64 *value); \
+	static inline int ds_##name##_search(ds_##name##_head_t *head, __u64 key); \
 	static inline int ds_##name##_verify(ds_##name##_head_t *head); \
 	static inline void ds_##name##_get_stats(ds_##name##_head_t *head, struct ds_stats *stats); \
 	static inline void ds_##name##_reset_stats(ds_##name##_head_t *head); \
 	static inline const struct ds_metadata* ds_##name##_get_metadata(void);
+	
+// static inline int ds_##name##_insert(ds_##name##_head_t *head, __u64 key, const struct ds_element *value); 
+// static inline int ds_##name##_search(ds_##name##_head_t *head, __u64 key, struct ds_element *value); 
 
 /**
  * DS_API_IMPL_INIT - Implement init operation
@@ -143,6 +152,7 @@ struct ds_stats {
  */
 #define DS_API_IMPL_INSERT(name, head_type, code) \
 	static inline int ds_##name##_insert(head_type *head, __u64 key, __u64 value) code
+	// static inline int ds_##name##_insert(head_type *head, __u64 key, const struct ds_element *value) code
 
 /**
  * DS_API_IMPL_DELETE - Implement delete operation
@@ -154,7 +164,8 @@ struct ds_stats {
  * DS_API_IMPL_SEARCH - Implement search operation
  */
 #define DS_API_IMPL_SEARCH(name, head_type, code) \
-	static inline int ds_##name##_search(head_type *head, __u64 key, __u64 *value) code
+	static inline int ds_##name##_search(head_type *head, __u64 key) code
+	// static inline int ds_##name##_search(head_type *head, __u64 key, struct ds_element *value) code
 
 /**
  * DS_API_IMPL_VERIFY - Implement verify operation
@@ -173,9 +184,10 @@ struct ds_stats {
  */
 struct ds_operation {
 	enum ds_op_type type;
-	__u64 key;
+	__u64 key;             /* For latency measurement */
 	__u64 value;
-	__u64 timestamp;             /* For latency measurement */
+	// struct ds_element value; /* Element data for insert/search */
+
 	int result;                  /* Operation result */
 };
 
