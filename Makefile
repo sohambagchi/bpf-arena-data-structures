@@ -70,8 +70,8 @@ VMLINUX := ./third_party/vmlinux.h
 # - $(OUTPUT): For generated skeleton headers
 # - libbpf/include/uapi: For BPF UAPI headers
 # - $(dir $(VMLINUX)): For vmlinux.h
-# - .: For local headers (ds_api.h, libarena_ds.h, etc.)
-INCLUDES := -I$(OUTPUT) -I./third_party/libbpf/include/uapi -I$(dir $(VMLINUX)) -I.
+# - ./include: For local headers (ds_api.h, libarena_ds.h, etc.)
+INCLUDES := -I$(OUTPUT) -I./third_party/libbpf/include/uapi -I$(dir $(VMLINUX)) -I./include
 
 # ============================================================================
 # COMPILER FLAGS
@@ -138,7 +138,8 @@ all: $(APPS)
 	@for app in $(APPS); do echo "  - $$app"; done
 	@echo ""
 	@echo "Run tests with:"
-	@echo "  sudo ./skeleton -t 4 -o 1000"
+	@echo "  sudo ./skeleton -d 5"
+	@echo "  sudo ./skeleton_msqueue -d 5"
 
 .PHONY: clean
 clean:
@@ -184,7 +185,7 @@ $(BPFTOOL): | $(BPFTOOL_OUTPUT)
 # - -D__TARGET_ARCH_$(ARCH): Define target architecture
 # - -D__BPF_FEATURE_ADDR_SPACE_CAST: Enable arena address space casting
 # - -O2: Optimize (required for BPF verifier)
-$(OUTPUT)/%.bpf.o: %.bpf.c $(LIBBPF_OBJ) $(wildcard %.h) $(VMLINUX) | $(OUTPUT) $(BPFTOOL)
+$(OUTPUT)/%.bpf.o: src/%.bpf.c $(LIBBPF_OBJ) $(wildcard include/*.h) $(VMLINUX) | $(OUTPUT) $(BPFTOOL)
 	$(call msg,BPF,$@)
 	$(Q)$(CLANG) -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH) -D__BPF_FEATURE_ADDR_SPACE_CAST	      \
 		     $(INCLUDES) $(CLANG_BPF_SYS_INCLUDES)		      \
@@ -216,7 +217,7 @@ $(OUTPUT)/%.skel.h: $(OUTPUT)/%.bpf.o | $(OUTPUT) $(BPFTOOL)
 # These depend on the skeleton header being generated first
 $(patsubst %,$(OUTPUT)/%.o,$(APPS)): %.o: %.skel.h
 
-$(OUTPUT)/%.o: %.c $(wildcard %.h) | $(OUTPUT)
+$(OUTPUT)/%.o: src/%.c $(wildcard include/*.h) | $(OUTPUT)
 	$(call msg,CC,$@)
 	$(Q)$(CC) $(CFLAGS) $(INCLUDES) -c $(filter %.c,$^) -o $@
 
@@ -239,34 +240,39 @@ $(APPS): %: $(OUTPUT)/%.o $(LIBBPF_OBJ) | $(OUTPUT)
 # ============================================================================
 
 .PHONY: test
-test: skeleton
-	@echo "Running smoke tests..."
+test: skeleton skeleton_msqueue
+	@echo "Running basic tests..."
 	@echo ""
-	@echo "Test 1: Skeleton with 2 threads, 100 ops"
-	sudo ./skeleton -t 2 -o 100 -w insert || (echo "FAILED: skeleton insert"; exit 1)
+	@echo "Test 1: Skeleton (list) - 5 second sleep"
+	sudo ./skeleton -d 5 || (echo "FAILED: skeleton"; exit 1)
 	@echo ""
-	@echo "Test 2: Skeleton with mixed workload"
-	sudo ./skeleton -t 4 -o 200 -w mixed || (echo "FAILED: skeleton mixed"; exit 1)
+	@echo "Test 2: Skeleton MS Queue - 5 second sleep"
+	sudo ./skeleton_msqueue -d 5 || (echo "FAILED: skeleton_msqueue"; exit 1)
 	@echo ""
 	@echo "All tests passed!"
 
 .PHONY: test-stress
-test-stress: skeleton
+test-stress: skeleton skeleton_msqueue
 	@echo "Running stress tests..."
 	@echo "This may take a few minutes..."
 	@echo ""
-	@echo "Stress test 1: Many threads, many operations"
-	sudo ./skeleton -t 16 -o 10000 -w mixed || (echo "FAILED"; exit 1)
+	@echo "Stress test 1: Skeleton (list) - 30 second sleep"
+	sudo ./skeleton -d 30 || (echo "FAILED"; exit 1)
 	@echo ""
-	@echo "Stress test 2: Large key range"
-	sudo ./skeleton -t 8 -o 5000 -k 100000 -w mixed || (echo "FAILED"; exit 1)
+	@echo "Stress test 2: Skeleton MS Queue - 30 second sleep"
+	sudo ./skeleton_msqueue -d 30 || (echo "FAILED"; exit 1)
 	@echo ""
 	@echo "Stress tests passed!"
 
 .PHONY: test-verify
-test-verify: skeleton
+test-verify: skeleton skeleton_msqueue
 	@echo "Running verification tests..."
-	sudo ./skeleton -t 4 -o 1000 -v || (echo "FAILED"; exit 1)
+	@echo ""
+	@echo "Test 1: Skeleton (list) with verification"
+	sudo ./skeleton -d 5 -v || (echo "FAILED"; exit 1)
+	@echo ""
+	@echo "Test 2: Skeleton MS Queue with verification"
+	sudo ./skeleton_msqueue -d 5 -v || (echo "FAILED"; exit 1)
 	@echo "Verification tests passed!"
 
 # ============================================================================

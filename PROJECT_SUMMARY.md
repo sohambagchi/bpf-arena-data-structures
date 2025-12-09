@@ -64,22 +64,36 @@ A complete, production-ready framework for testing concurrent data structures us
 ---
 
 ### 4. Kernel-Side Skeleton (`skeleton.bpf.c`)
-**Purpose**: BPF program for kernel-space operations
+**Purpose**: BPF program for kernel-space operations (list implementation)
 
 **Features**:
 - Arena map definition (configurable size)
 - LSM hook on inode_create (triggers on file creation)
-- Direct insertion of (pid, timestamp) pairs
+- Direct insertion of (pid, timestamp) pairs into list
 - Sleepable context (allows arena allocation)
 - Verification support
 - Clear insertion points marked with `/* DS_API_INSERT */`
 
-**Lines**: ~170 lines (simplified from original 300)
+**Lines**: ~170 lines
+
+---
+
+### 4b. Kernel-Side Skeleton for MS Queue (`skeleton_msqueue.bpf.c`)
+**Purpose**: BPF program for Michael-Scott queue operations
+
+**Features**:
+- Arena map definition (configurable size)
+- LSM hook on inode_create (triggers on file creation)
+- Direct insertion into MS queue
+- Lock-free queue operations
+- Verification support
+
+**Lines**: ~165 lines
 
 ---
 
 ### 5. Userspace Skeleton (`skeleton.c`)
-**Purpose**: Userspace reader program
+**Purpose**: Userspace reader program (list implementation)
 
 **Features**:
 - Single-threaded reader design
@@ -89,10 +103,26 @@ A complete, production-ready framework for testing concurrent data structures us
 - Verification support
 - Statistics display
 - Signal handling
-- Command-line argument parsing
+- Command-line argument parsing (-d, -v, -s)
 - Simple output formatting
 
-**Lines**: ~270 lines (simplified from original 700)
+**Lines**: ~270 lines
+
+---
+
+### 5b. Userspace Skeleton for MS Queue (`skeleton_msqueue.c`)
+**Purpose**: Userspace reader program (MS queue implementation)
+
+**Features**:
+- Single-threaded reader design
+- Direct arena memory access (zero-copy)
+- Configurable sleep duration
+- Queue iteration and display
+- Verification support
+- Statistics display
+- MS queue-specific operations
+
+**Lines**: ~300 lines
 
 ---
 
@@ -134,26 +164,28 @@ A complete, production-ready framework for testing concurrent data structures us
 
 ### 8. Testing Infrastructure
 
+**NOTE**: These test scripts are templates designed for a multi-threaded implementation.
+They reference command-line options (`-t`, `-o`, `-w`) that the current simple implementation doesn't use.
+
 #### a. Smoke Tests (`test_smoke.sh`)
-- 5 basic tests (~30 seconds total)
-- Tests: arena_list example, single thread, multi-thread, search, delete
-- Quick validation of core functionality
+- Template for 5 basic tests
+- Designed for: arena_list, single/multi-thread, search, delete workloads
+- For current implementation, use: `sudo ./skeleton -d 5` and `sudo ./skeleton_msqueue -d 5`
 
 #### b. Stress Tests (`test_stress.sh`)
-- 5 intensive tests (~5 minutes total)
-- Tests: high concurrency, large key space, insert-heavy, high contention, burst testing
-- Validates stability under load
+- Template for 5 intensive tests
+- Designed for: high concurrency, large key space, high contention scenarios
+- For current implementation, use longer sleep durations: `sudo ./skeleton -d 30`
 
 #### c. Verification Tests (`test_verify.sh`)
-- 6 correctness tests
-- Tests: single thread, low/medium/high concurrency, insert-heavy, high contention
-- All with data structure integrity checking
+- Template for 6 correctness tests
+- Designed for: various concurrency levels with integrity checking
+- For current implementation, use: `sudo ./skeleton -d 5 -v` and `sudo ./skeleton_msqueue -d 5 -v`
 
 #### d. Performance Benchmark (`benchmark.sh`)
-- Thread scaling tests (1, 2, 4, 8, 16 threads)
-- Workload type tests (insert, search, delete, mixed)
-- Contention tests (various key ranges)
-- Generates results file with ops/sec metrics
+- Template for performance measurement
+- Designed for: thread scaling, workload types, contention tests
+- For current implementation, benchmark kernel insert rate vs. system activity
 
 **Total Lines**: ~400 lines across all test scripts
 
@@ -191,13 +223,16 @@ A complete, production-ready framework for testing concurrent data structures us
 
 ## 📊 Statistics
 
-### Total New Files Created: 10
+### Core Implementation Files
 
-1. `libarena_ds.h` - 300 lines
-2. `ds_api.h` - 400 lines
-3. `ds_list.h` - 450 lines
-4. `skeleton.bpf.c` - 300 lines
-5. `skeleton.c` - 700 lines
+1. `libarena_ds.h` - 213 lines (arena allocator)
+2. `ds_api.h` - 308 lines (API template)
+3. `ds_list.h` - 352 lines (doubly-linked list)
+4. `ds_msqueue.h` - 507 lines (Michael-Scott queue)
+5. `skeleton.bpf.c` - 170 lines (kernel BPF for list)
+6. `skeleton.c` - 270 lines (userspace reader for list)
+7. `skeleton_msqueue.bpf.c` - 165 lines (kernel BPF for queue)
+8. `skeleton_msqueue.c` - 300 lines (userspace reader for queue)
 6. `Makefile.new` - 350 lines
 7. `GUIDE.md` - 1000 lines
 8. Testing scripts - 400 lines

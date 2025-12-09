@@ -64,25 +64,43 @@
   - Helper macros
   - ~400 lines with examples
 
-### Reference Implementation
+### Reference Implementations
 - **`ds_list.h`** - Doubly-linked list
   - Complete implementation
   - All API operations
-  - Lock-free operations
-  - ~450 lines
+  - Lock-free operations with atomics
+  - ~352 lines
+
+- **`ds_msqueue.h`** - Michael-Scott queue
+  - Non-blocking FIFO queue
+  - Lock-free enqueue/dequeue
+  - Based on M&S 1996 paper
+  - ~507 lines
 
 ### Test Framework
-- **`skeleton.bpf.c`** - Kernel-side BPF program
+- **`skeleton.bpf.c`** - Kernel-side BPF program (list)
   - Arena map definition
-  - Syscall tracepoints
+  - LSM hook on inode_create
   - Operation dispatch
-  - ~300 lines
+  - ~170 lines
 
-- **`skeleton.c`** - Userspace test driver
-  - Pthread workers
-  - Workload generators
+- **`skeleton.c`** - Userspace test driver (list)
+  - Single-threaded reader
+  - Sleep then read pattern
   - Statistics collection
-  - ~700 lines
+  - ~270 lines
+
+- **`skeleton_msqueue.bpf.c`** - Kernel-side BPF program (MS queue)
+  - Arena map definition
+  - LSM hook on inode_create
+  - MS queue operations
+  - ~165 lines
+
+- **`skeleton_msqueue.c`** - Userspace test driver (MS queue)
+  - Single-threaded reader
+  - Sleep then read pattern
+  - Queue-specific operations
+  - ~300 lines
 
 ### Build System
 - **`Makefile.new`** - Annotated build system

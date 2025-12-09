@@ -23,7 +23,8 @@ This framework provides a testing infrastructure for **concurrent data structure
 - **Lock-free primitives**: Built-in atomic operations for concurrent access
 - **Verification support**: Data structure integrity checking
 - **Modular design**: Easy to add new data structures
-- **Simple execution model**: Kernel inserts, userspace reads
+- **Simple execution model**: Kernel inserts via LSM hook, userspace reads after sleep
+- **Two implementations**: Doubly-linked list and Michael-Scott queue
 
 ### Use Cases
 
@@ -62,15 +63,19 @@ This framework provides a testing infrastructure for **concurrent data structure
 │  │  - Accessible from both contexts                 │      │
 │  └──────────────────────────────────────────────────┘      │
 │                          │                                   │
-├──────────────────────────┼───────────────────────────────────┤
+├─────────────────────────────────────────────────────────────┤
 │                   KERNEL SPACE                               │
 ├─────────────────────────────────────────────────────────────┤
-│  skeleton.bpf.c                                             │
-│  ┌──────────────────┐  ┌──────────────────┐               │
-│  │ Tracepoint:      │  │ Manual Trigger:  │               │
-│  │ sys_enter_execve │  │ manual_operation │               │
-│  │ (insert ops)     │  │ batch_operations │               │
-│  └──────────────────┘  └──────────────────┘               │
+│  skeleton.bpf.c / skeleton_msqueue.bpf.c                    │
+│  ┌─────────────────────────────────────────────┐   │
+│  │ LSM Hook: lsm.s/inode_create            │   │
+│  │                                             │   │
+│  │ Triggers on: File creation              │   │
+│  │ Action: Insert (pid, timestamp) pair    │   │
+│  │                                             │   │
+│  │ Uses: ds_list_insert() or               │   │
+│  │       ds_msqueue_insert()                │   │
+│  └─────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -326,42 +331,52 @@ Edit `skeleton.c` to use your data structure:
 #include "ds_tree.h"  // ADD THIS
 ```
 
-**2. Update worker functions** (line ~150):
+**2. Update the reader function** (line ~70):
 ```c
-static void workload_mixed(struct ds_tree_head *head, int thread_id,
-                            struct thread_stats *stats)
+static void read_data_structure()
 {
-    for (int i = 0; i < config.ops_per_thread && !stop_test; i++) {
-        __u64 key = generate_random_key(thread_id, i);
-        __u64 value = key * 2;
-        int op_type = i % 10;
-        int result;
-        
-        if (op_type < 5) {
-            result = ds_tree_insert(head, key, value);  // Use tree API
-            stats->inserts++;
-        } else if (op_type < 8) {
-            result = ds_tree_search(head, key, &value);
-            stats->searches++;
-        } else {
-            result = ds_tree_delete(head, key);
-            stats->deletes++;
-        }
-        
-        stats->operations++;
-        if (result != DS_SUCCESS)
-            stats->failures++;
+    printf("Sleeping for %d seconds to allow kernel to populate data structure...\n", 
+           config.sleep_seconds);
+    sleep(config.sleep_seconds);
+    
+    struct ds_tree_head *head = skel->bss->ds_head;  // Change to your type
+
+    if (!head) {
+        printf("Data structure not yet initialized\n");
+        return;
     }
+    
+    printf("Reading data structure...\n");
+    
+    /* Use your ds_<name>_iterate API */
+    print_count = 0;
+    __u64 visited = ds_tree_iterate(head, print_element_callback, NULL);
+    
+    if (visited >= 10) {
+        printf("  ... (showing first 10 elements)\n");
+    }
+    
+    printf("Total elements in tree: %llu\n", head->count);
 }
 ```
 
-**3. Update worker context type**:
+**3. Update verification function** (if implementing verify):
 ```c
-struct worker_context {
-    int thread_id;
-    struct ds_tree_head *ds_head;  // Change type
-    struct thread_stats stats;
-};
+static int verify_data_structure(void)
+{
+    struct ds_tree_head *head = skel->bss->ds_head;  // Change type
+    
+    printf("Verifying data structure from userspace...\n");
+    
+    int result = ds_tree_verify(head);  // Use your verify function
+    if (result == DS_SUCCESS) {
+        printf("✓ Data structure verification PASSED\n");
+    } else {
+        printf("✗ Data structure verification FAILED (error %d)\n", result);
+    }
+        
+    return result;
+}
 ```
 
 ### Step 4: Build and Test
@@ -401,10 +416,11 @@ sudo ./skeleton -d 10 -s
 
 ```
 Usage: ./skeleton [OPTIONS]
+Usage: ./skeleton_msqueue [OPTIONS]
 
 DESIGN:
   Kernel:    LSM hook on inode_create inserts items (triggers on file creation)
-  Userspace: Single thread sleeps, then reads the data structure
+  Userspace: Single-threaded reader sleeps, then reads the data structure
 
 OPTIONS:
   -d N    Sleep duration in seconds before reading (default: 5)
@@ -412,20 +428,20 @@ OPTIONS:
   -s      Print statistics (default: enabled)
   -h      Show help
 
-Note: Kernel inserts trigger automatically when files are created on the system.
+NOTE: Kernel inserts trigger automatically when files are created on the system.
+      No manual operation triggering needed - just let it sleep and collect data.
 ```
 
 ### Automated Tests
 
+**Note:** The current test scripts are templates designed for a multi-threaded implementation.
+They reference command-line options (`-t`, `-o`, `-w`) that the current simple implementation doesn't use.
+
 ```bash
-# Run all smoke tests
-make test
-
-# Run stress tests (takes longer)
-make test-stress
-
-# Run verification tests
-make test-verify
+# These are templates - may need adjustment for current simple design:
+# make test
+# make test-stress
+# make test-verify
 ```
 
 ### Understanding Test Output

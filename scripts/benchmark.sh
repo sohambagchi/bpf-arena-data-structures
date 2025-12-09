@@ -1,6 +1,16 @@
 #!/bin/bash
 # Performance benchmark for BPF Arena Data Structure Framework
 # Measures throughput under various conditions
+#
+# NOTE: This script is a TEMPLATE for a multi-threaded implementation.
+# The current skeleton implementation uses a simpler design:
+# - Kernel: LSM hook inserts on file creation
+# - Userspace: Single-threaded reader (sleeps, then reads)
+# 
+# Command-line options like -t, -o, -w are for future multi-threaded versions.
+# For current implementation benchmarking, measure:
+# - Kernel insert rate during varying system activity
+# - Data structure read time after different sleep durations
 
 set -e
 

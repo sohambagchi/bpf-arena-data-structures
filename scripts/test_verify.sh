@@ -1,6 +1,16 @@
 #!/bin/bash
 # Correctness verification test for BPF Arena Data Structure Framework
 # Tests data structure integrity and consistency
+#
+# NOTE: This script is a TEMPLATE for a multi-threaded implementation.
+# The current skeleton implementation uses a simpler design:
+# - Kernel: LSM hook inserts on file creation
+# - Userspace: Single-threaded reader (sleeps, then reads)
+# 
+# Command-line options like -t, -o, -w are for future multi-threaded versions.
+# To test the current implementation, use:
+#   sudo ./skeleton -d 5 -v
+#   sudo ./skeleton_msqueue -d 5 -v
 
 set -e
 

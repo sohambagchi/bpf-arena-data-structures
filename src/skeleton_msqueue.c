@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Skeleton Userspace Program for BPF Arena Data Structure Testing
+/* Skeleton Userspace Program for BPF Arena MS Queue Testing
  * 
  * SIMPLIFIED DESIGN:
- * - Kernel: LSM hook on inode_create inserts items (triggers on execve)
+ * - Kernel: LSM hook on inode_create inserts items (triggers on file creation)
  * - Userspace: Single thread sleeps, then reads the data structure
  * 
  * USAGE:
- *   ./skeleton [OPTIONS]
+ *   ./skeleton_msqueue [OPTIONS]
  *   
  * OPTIONS:
  *   -d N    Sleep duration in seconds before reading (default: 5)
@@ -30,8 +30,8 @@
 
 /* Include data structure headers */
 #include "ds_api.h"
-#include "ds_list.h"
-#include "skeleton.skel.h"
+#include "ds_msqueue.h"
+#include "skeleton_msqueue.skel.h"
 
 /* ========================================================================
  * CONFIGURATION
@@ -54,7 +54,7 @@ static struct test_config config = {
  * GLOBAL STATE
  * ======================================================================== */
 
-static struct skeleton_bpf *skel = NULL;
+static struct skeleton_msqueue_bpf *skel = NULL;
 static volatile bool stop_test = false;
 
 /* ========================================================================
@@ -66,8 +66,7 @@ static __u64 print_count = 0;
 
 static int print_element_callback(__u64 key, __u64 value, void *ctx __attribute__((unused)))
 {
-	cast_user(comm);
-	printf("  Element %llu: pid=%llu, last_ts=%llu\n", print_count, key, value);
+	printf("  Element %llu: pid=%llu, ts=%llu\n", print_count, key, value);
 	print_count++;
 	
 	/* Stop after 10 elements */
@@ -85,24 +84,36 @@ static void read_data_structure()
 	printf("Sleeping for %d seconds to allow kernel to populate data structure...\n", config.sleep_seconds);
 	sleep(config.sleep_seconds);
 	
-	struct ds_list_head *head = skel->bss->ds_head;
+	struct ds_msqueue *queue = skel->bss->ds_queue;
 
-	if (!head) {
-		printf("Data structure not yet initialized\n");
+	if (!queue) {
+		printf("Data structure not yet initialized (ds_queue is NULL)\n");
+		printf("LSM hooks may not have triggered yet\n");
 		return;
 	}
 	
-	printf("Reading data structure...\n");
+	printf("Reading data structure... (queue=%p)\n", queue);
 	
-	/* Use ds_list_iterate API */
+	/* Check if queue has been initialized (head should not be NULL after init) */
+	cast_kern(queue);
+	if (!queue->head) {
+		printf("Queue head is NULL - queue not yet initialized by kernel\n");
+		return;
+	}
+	
+	printf("Queue count: %llu\n", queue->count);
+	
+	/* Use ds_msqueue_iterate API */
+	cast_user(queue);
 	print_count = 0;
-	__u64 visited = ds_list_iterate(head, print_element_callback, NULL);
+	__u64 visited = ds_msqueue_iterate(queue, print_element_callback, NULL);
 	
 	if (visited >= 10) {
 		printf("  ... (showing first 10 elements)\n");
 	}
 	
-	printf("Total elements in list: %llu\n", head->count);
+	cast_kern(queue);
+	printf("Total elements in queue: %llu\n", queue->count);
 }
 
 /* ========================================================================
@@ -114,11 +125,11 @@ static void read_data_structure()
  */
 static int verify_data_structure(void)
 {
-	struct ds_list_head *head = skel->bss->ds_head;
+	struct ds_msqueue *queue = skel->bss->ds_queue;
 	
 	printf("Verifying data structure from userspace...\n");
 	
-	int result = ds_list_verify(head);
+	int result = ds_msqueue_verify(queue);
 	if (result == DS_SUCCESS) {
 		printf("✓ Data structure verification PASSED\n");
 	} else {
@@ -145,9 +156,9 @@ static void print_statistics(void)
 	
 	/* Data structure statistics */
 	printf("\nData Structure State:\n");
-	struct ds_list_head *head = skel->bss->ds_head;
-	if (head) {
-		printf("  Elements in list: %llu\n", head->count);
+	struct ds_msqueue *queue = skel->bss->ds_queue;
+	if (queue) {
+		printf("  Elements in queue: %llu\n", queue->count);
 	} else {
 		printf("  Data structure not yet initialized\n");
 	}
@@ -172,16 +183,16 @@ static void signal_handler(int sig)
 static void print_usage(const char *prog)
 {
 	printf("Usage: %s [OPTIONS]\n\n", prog);
-	printf("Test concurrent data structures with BPF arena\n\n");
+	printf("Test Michael-Scott queue with BPF arena\n\n");
 	printf("DESIGN:\n");
-	printf("  Kernel:    LSM hook on inode_create inserts items (triggers on execve)\n");
+	printf("  Kernel:    LSM hook on inode_create inserts items (triggers on file creation)\n");
 	printf("  Userspace: Single thread sleeps, then reads the data structure\n\n");
 	printf("OPTIONS:\n");
 	printf("  -d N    Sleep duration in seconds before reading (default: 5)\n");
 	printf("  -v      Verify data structure integrity\n");
 	printf("  -s      Print statistics (default: enabled)\n");
 	printf("  -h      Show this help\n");
-	printf("\nKernel inserts trigger automatically on program execution (execve)\n");
+	printf("\nKernel inserts trigger automatically on file creation (inode_create)\n");
 	printf("\nExamples:\n");
 	printf("  %s -d 10     # Sleep 10 seconds before reading\n", prog);
 	printf("  %s -d 5 -v   # Sleep 5 seconds then verify\n", prog);
@@ -231,15 +242,15 @@ int main(int argc, char **argv)
 	signal(SIGTERM, signal_handler);
 	
 	/* Open and load BPF skeleton */
-	printf("Loading BPF program...\n");
-	skel = skeleton_bpf__open_and_load();
+	printf("Loading BPF program for MS Queue...\n");
+	skel = skeleton_msqueue_bpf__open_and_load();
 	if (!skel) {
 		fprintf(stderr, "Failed to open and load BPF skeleton\n");
 		return 1;
 	}
 	
 	/* Attach BPF programs */
-	err = skeleton_bpf__attach(skel);
+	err = skeleton_msqueue_bpf__attach(skel);
 	if (err) {
 		fprintf(stderr, "Failed to attach BPF programs: %d\n", err);
 		goto cleanup;
@@ -265,6 +276,6 @@ int main(int argc, char **argv)
 	printf("\nDone!\n");
 
 cleanup:
-	skeleton_bpf__destroy(skel);
+	skeleton_msqueue_bpf__destroy(skel);
 	return err;
 }

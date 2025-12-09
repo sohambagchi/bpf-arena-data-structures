@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Skeleton BPF Program for Concurrent Data Structure Testing
+/* Skeleton BPF Program for Michael-Scott Queue Testing
  * 
- * This program provides a template for testing concurrent data structures
- * where operations can be triggered from both kernel space (via syscalls)
+ * This program provides a template for testing the MS Queue data structure
+ * where operations can be triggered from both kernel space (via LSM hooks)
  * and userspace (via direct arena access).
  * 
  * CUSTOMIZATION POINTS:
@@ -40,9 +40,7 @@ struct {
 /* ========================================================================
  * DS_API_INSERT: Include your data structure headers here
  * ======================================================================== */
-/* Example: #include "ds_list.h" */
-/* Example: #include "ds_tree.h" */
-#include "ds_list.h"  /* Default: include list implementation */
+#include "ds_msqueue.h"  /* Michael-Scott Queue implementation */
 
 /* ========================================================================
  * GLOBAL STATE
@@ -52,9 +50,8 @@ struct {
 int config_key_range = 1000;
 
 /* DS_API_INSERT: Declare your data structure head here */
-/* Example: struct ds_tree_head __arena *ds_head; */
-struct ds_list_head __arena *ds_head;
-struct ds_list_head __arena global_ds_head;
+struct ds_msqueue __arena *ds_queue;
+struct ds_msqueue __arena global_ds_queue;
 
 /* Statistics and control */
 __u64 total_kernel_ops = 0;
@@ -74,41 +71,41 @@ bool initialized = false;
  * 
  * DS_API_INSERT: Add cases for your data structure operations here
  * 
- * NOTE: Simplified design - kernel only does inserts via path_mkdir hook,
+ * NOTE: Simplified design - kernel only does inserts via LSM hook,
  * userspace threads poll/search the data structure.
  */
 static __always_inline int handle_operation(struct ds_operation *op)
 {
 	int result = DS_ERROR_INVALID;
 	
-	if (!ds_head)
+	if (!ds_queue)
 		return DS_ERROR_INVALID;
 	
 	switch (op->type) {
 	case DS_OP_INIT:
 		/* DS_API_INSERT: Call your init function */
-		result = ds_list_init(ds_head);
+		result = ds_msqueue_init(ds_queue);
 		initialized = true;
 		break;
 		
 	case DS_OP_INSERT:
 		/* DS_API_INSERT: Call your insert function */
-		result = ds_list_insert(ds_head, op->key, op->value);
+		result = ds_msqueue_insert(ds_queue, op->kv.key, op->kv.value);
 		break;
 		
 	case DS_OP_DELETE:
 		/* DS_API_INSERT: Call your delete function */
-		result = ds_list_delete(ds_head, op->key);
+		result = ds_msqueue_delete(ds_queue, &op->kv);
 		break;
 		
 	case DS_OP_SEARCH:
 		/* DS_API_INSERT: Call your search function */
-		result = ds_list_search(ds_head, op->key);
+		result = ds_msqueue_search(ds_queue, op->kv.key);
 		break;
 		
 	case DS_OP_VERIFY:
 		/* DS_API_INSERT: Call your verify function */
-		result = ds_list_verify(ds_head);
+		result = ds_msqueue_verify(ds_queue);
 		break;
 		
 	default:
@@ -139,7 +136,7 @@ SEC("lsm.s/inode_create")
 int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	int result;
-	ds_head = &global_ds_head;
+	ds_queue = &global_ds_queue;
 	
 	__u64 pid;
 	__u64 ts;
@@ -147,7 +144,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 	pid = bpf_get_current_pid_tgid() >> 32;
 
 	ts = bpf_ktime_get_ns();
-	result = ds_list_insert(ds_head, pid, ts);
+	result = ds_msqueue_insert(ds_queue, pid, ts);
 	
 	/* Update statistics */
 	total_kernel_ops++;

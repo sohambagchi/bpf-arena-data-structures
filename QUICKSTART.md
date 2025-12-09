@@ -4,11 +4,11 @@
 
 ## What Does This Do?
 
-This framework lets you test **concurrent data structures** (like lists, trees, queues) where operations happen from:
-- **Kernel-space BPF programs** (via LSM hooks that trigger on file creation)
-- **Userspace programs** (direct arena memory access for reading)
+This framework lets you test **data structures in shared memory** (BPF arena) where:
+- **Kernel-space BPF programs** insert data automatically (via LSM hooks triggered on file creation)
+- **Userspace programs** read the data structure directly (single-threaded, after a sleep period)
 
-Both access the **same memory** (BPF arena) without copying data. The kernel populates the data structure automatically when files are created, and userspace can read it directly.
+Both access the **same memory** (BPF arena) without copying data. The kernel populates the data structure automatically when files are created, and userspace can read it directly after sleeping.
 
 ## Prerequisites Check (2 minutes)
 
@@ -53,12 +53,13 @@ sudo ./skeleton -d 5
 
 ## What Just Happened?
 
-1. **Compiled BPF program** → Runs in kernel, attached to LSM hook
+1. **Compiled BPF program** → Runs in kernel, attached to LSM hook (inode_create)
 2. **Compiled userspace program** → Single-threaded reader
-3. **Created shared arena** → Both sides access same memory
-4. **Kernel populated list** → LSM hook triggers on file creations (inode_create)
-5. **Userspace read results** → Direct arena access, no syscalls needed
-6. **Printed statistics** → Element count, insert statistics
+3. **Created shared arena** → Both sides access same memory (BPF arena)
+4. **Kernel inserts data** → LSM hook triggers automatically on file creations
+5. **Userspace sleeps 5 seconds** → Allows kernel time to populate data structure
+6. **Userspace reads results** → Direct arena access, no syscalls needed
+7. **Printed statistics** → Element count, insert statistics
 
 ## Try Different Tests
 
@@ -69,11 +70,14 @@ sudo ./skeleton -d 30
 # Verify data structure integrity
 sudo ./skeleton -d 5 -v
 
-# Just show statistics
+# Show statistics (enabled by default)
 sudo ./skeleton -d 5 -s
 
-# Run all smoke tests (if available)
-sudo ./test_smoke.sh
+# Test the Michael-Scott queue
+sudo ./skeleton_msqueue -d 10
+
+# Test MS queue with verification
+sudo ./skeleton_msqueue -d 5 -v
 ```
 
 ## Understanding the Output
@@ -249,58 +253,58 @@ Functions:               ds_<name>_<op>    (e.g., ds_tree_insert)
 
 ```bash
 # 1. Make changes to your data structure
-vim ds_mylist.h
+vim ds_myds.h
 
-# 2. Update skeleton files (follow markers)
+# 2. Update skeleton files (follow markers with /* DS_API_INSERT */)
 vim skeleton.bpf.c  # Add includes and dispatch
-vim skeleton.c      # Update types and calls
+vim skeleton.c      # Update includes and types
 
 # 3. Build
 make clean && make
 
-# 4. Quick test
+# 4. Quick test (short sleep)
 sudo ./skeleton -d 2
 
-# 5. Full test
+# 5. Full test (longer sleep with verification)
 sudo ./skeleton -d 10 -v
 
-# 6. Automated tests (update scripts for new model)
-sudo ./test_smoke.sh
+# 6. Check statistics
+sudo ./skeleton -d 5 -s
 ```
 
 ## Cheat Sheet
 
 ```bash
 # Build
-make -f Makefile.new                    # Build all
-make -f Makefile.new skeleton           # Build just skeleton
-make -f Makefile.new clean              # Clean all
+make                                    # Build all
+make skeleton                           # Build just skeleton (list)
+make skeleton_msqueue                   # Build just MS queue
+make clean                              # Clean all
 
-# Run
-sudo ./skeleton -t T -o O -w W          # T threads, O ops, W workload
-sudo ./skeleton -t 4 -o 1000 -v         # With verification
-sudo ./skeleton -t 8 -o 5000 -w insert  # Insert-only
+# Run (list)
+sudo ./skeleton -d N                    # Sleep N seconds, then read
+sudo ./skeleton -d 5 -v                 # With verification
+sudo ./skeleton -d 10 -s                # With statistics
 
-# Test
-sudo ./test_smoke.sh                    # Quick tests
-sudo ./test_stress.sh                   # Stress tests
-sudo ./test_verify.sh                   # Verify correctness
-sudo ./benchmark.sh                     # Measure performance
+# Run (MS queue)
+sudo ./skeleton_msqueue -d N            # Sleep N seconds, then read
+sudo ./skeleton_msqueue -d 5 -v         # With verification
 
-# Workload types
--w insert     # Only insertions
--w search     # Only searches
--w delete     # Only deletions
--w mixed      # Mix of all (default)
+# Options
+-d N      # Sleep duration in seconds (default: 5)
+-v        # Verify data structure integrity
+-s        # Print statistics (default: enabled)
+-h        # Show help
 ```
 
 ## Success Checklist
 
 - [ ] Kernel 6.10+ with `CONFIG_BPF_ARENA=y`
 - [ ] Clang 15+ installed
-- [ ] Built successfully with `make -f Makefile.new`
-- [ ] Ran `sudo ./skeleton -t 4 -o 1000` without errors
-- [ ] `test_smoke.sh` passes all tests
+- [ ] Built successfully with `make`
+- [ ] Ran `sudo ./skeleton -d 5` without errors
+- [ ] Ran `sudo ./skeleton_msqueue -d 5` without errors
+- [ ] Data structure output shows elements
 - [ ] Read GUIDE.md sections you need
 
 **All checked? You're ready to add your own data structures!**

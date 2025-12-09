@@ -8,7 +8,7 @@ A comprehensive framework for testing concurrent data structures using **BPF are
 # Build everything
 make
 
-# Run basic test
+# Run basic test (kernel LSM hook populates, userspace reads after sleep)
 sudo ./skeleton -d 5
 
 # Run with verification  
@@ -29,16 +29,21 @@ cat GUIDE.md
 
 ### Test Framework
 
-- **`skeleton.bpf.c`** - Kernel-side BPF program with LSM hooks
-- **`skeleton.c`** - Userspace reader program
+- **`skeleton.bpf.c`** - Kernel-side BPF program with LSM hooks (inserts on file creation)
+- **`skeleton.c`** - Userspace reader program (single-threaded)
+- **`skeleton_msqueue.bpf.c`** - Kernel-side BPF program for MS Queue
+- **`skeleton_msqueue.c`** - Userspace reader for MS Queue
 - **`ds_list.h`** - Reference implementation (doubly-linked list)
+- **`ds_msqueue.h`** - Michael-Scott lock-free queue implementation
 
 ### Testing Infrastructure
 
-- **`test_smoke.sh`** - Quick smoke tests (5 tests, ~30 seconds)
-- **`test_stress.sh`** - Stress tests (5 tests, ~5 minutes)
-- **`test_verify.sh`** - Correctness verification (6 tests)
-- **`benchmark.sh`** - Performance benchmarking
+**Note:** Test scripts reference workload parameters that the current simplified implementation doesn't use. They serve as templates for future multi-threaded implementations.
+
+- **`test_smoke.sh`** - Quick smoke tests (template)
+- **`test_stress.sh`** - Stress tests (template)
+- **`test_verify.sh`** - Correctness verification (template)
+- **`benchmark.sh`** - Performance benchmarking (template)
 
 ### Documentation
 
@@ -54,8 +59,9 @@ cat GUIDE.md
 ```
 ┌─────────────────────────────────────────┐
 │         USER SPACE                      │
-│  Multiple threads via pthreads          │
+│  Single-threaded reader                 │
 │  Direct arena access (no syscalls)      │
+│  Sleeps, then reads data structure      │
 ├─────────────────────────────────────────┤
 │         BPF ARENA                       │
 │  Shared memory region (up to 4GB)       │
@@ -63,7 +69,8 @@ cat GUIDE.md
 ├─────────────────────────────────────────┤
 │         KERNEL SPACE                    │
 │  BPF programs via LSM hooks             │
-│  Operations triggered by file creation  │
+│  Inserts triggered by file creation     │
+│  (inode_create LSM hook)                │
 └─────────────────────────────────────────┘
 ```
 
@@ -72,46 +79,55 @@ cat GUIDE.md
 ### Basic Testing
 
 ```bash
-# Run for 10 seconds, then read results
+# Sleep for 10 seconds while kernel LSM hook inserts data, then read results
 sudo ./skeleton -d 10
 
-# Run for 5 seconds with data structure verification
+# Sleep 5 seconds with data structure verification
 sudo ./skeleton -d 5 -v
 
-# Run with statistics output (enabled by default)
+# Sleep 5 seconds with statistics output (enabled by default)
 sudo ./skeleton -d 5 -s
+```
+
+### Testing MS Queue
+
+```bash
+# Test Michael-Scott lock-free queue
+sudo ./skeleton_msqueue -d 10
+
+# With verification
+sudo ./skeleton_msqueue -d 5 -v
 ```
 
 ### Automated Testing
 
+**Note:** These test scripts are templates for future multi-threaded implementations.
+
 ```bash
-# Quick smoke tests
-sudo ./test_smoke.sh
-
-# Stress tests (takes longer)
-sudo ./test_stress.sh
-
-# Correctness verification
-sudo ./test_verify.sh
-
-# Performance benchmarking
-sudo ./benchmark.sh
+# Test scripts (templates - may need adjustment for current design)
+# sudo ./test_smoke.sh
+# sudo ./test_stress.sh
+# sudo ./test_verify.sh
+# sudo ./benchmark.sh
 ```
 
 ### Command-Line Options
 
 ```
 ./skeleton [OPTIONS]
+./skeleton_msqueue [OPTIONS]
 
 DESIGN:
-  Kernel:    LSM hook on inode_create inserts items
-  Userspace: Single thread sleeps, then reads data structure
+  Kernel:    LSM hook on inode_create inserts items (triggers on file creation)
+  Userspace: Single-threaded reader sleeps, then reads data structure
 
 OPTIONS:
   -d N    Sleep duration in seconds before reading (default: 5)
   -v      Verify data structure integrity
   -s      Print statistics (default: enabled)
   -h      Show this help
+
+NOTE: Kernel inserts trigger automatically when files are created on the system.
 ```
 
 ## 📦 Requirements
@@ -220,24 +236,46 @@ Data Structure State:
 ## 📁 File Structure
 
 ```
-bpf_arena/
-├── libarena_ds.h           # Arena allocation library ⭐
-├── ds_api.h                # API template ⭐
-├── ds_list.h               # Example: linked list ⭐
-├── skeleton.bpf.c          # Kernel-side driver ⭐
-├── skeleton.c              # Userspace driver ⭐
-├── Makefile                # Build system ⭐
-├── GUIDE.md                # Comprehensive guide ⭐
-├── README.md               # This file
-├── test_smoke.sh           # Smoke tests
-├── test_stress.sh          # Stress tests
-├── test_verify.sh          # Verification tests
-├── benchmark.sh            # Performance benchmarks
-├── bpf_arena_common.h      # Common definitions
-├── bpf_arena_alloc.h       # Original allocator (reference)
-├── bpf_arena_list.h        # Original list (reference)
-├── arena_list.bpf.c        # Original example
-└── arena_list.c            # Original example
+bpf-arena-data-structures/
+├── Core Framework
+│   ├── libarena_ds.h           # Arena allocation library ⭐
+│   ├── ds_api.h                # API template ⭐
+│   ├── bpf_arena_common.h      # Common definitions ⭐
+│   └── bpf_experimental.h      # BPF experimental features
+│
+├── Data Structure Implementations
+│   ├── ds_list.h               # Doubly-linked list ⭐
+│   └── ds_msqueue.h            # Michael-Scott queue ⭐
+│
+├── Test Programs
+│   ├── skeleton.bpf.c          # Kernel BPF program (list) ⭐
+│   ├── skeleton.c              # Userspace reader (list) ⭐
+│   ├── skeleton_msqueue.bpf.c  # Kernel BPF program (queue) ⭐
+│   └── skeleton_msqueue.c      # Userspace reader (queue) ⭐
+│
+├── Build System
+│   └── Makefile                # Build system ⭐
+│
+├── Documentation
+│   ├── README.md               # This file
+│   ├── GUIDE.md                # Comprehensive guide ⭐
+│   ├── QUICKSTART.md           # Quick start guide
+│   ├── INDEX.md                # Navigation index
+│   ├── PROJECT_SUMMARY.md      # Project summary
+│   └── ARCHITECTURE_DIAGRAMS.md # Visual diagrams
+│
+├── Test Scripts (Templates)
+│   ├── test_smoke.sh           # Smoke tests (template)
+│   ├── test_stress.sh          # Stress tests (template)
+│   ├── test_verify.sh          # Verification tests (template)
+│   └── benchmark.sh            # Performance benchmarks (template)
+│
+└── Third Party Dependencies
+    └── third_party/
+        ├── vmlinux.h           # Kernel type definitions
+        ├── libbpf/             # BPF library
+        ├── bpftool/            # BPF tool
+        └── vmlinux/            # Architecture-specific vmlinux headers
 ```
 
 ⭐ = Core framework files

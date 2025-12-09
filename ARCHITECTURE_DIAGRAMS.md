@@ -3,71 +3,75 @@
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         USER SPACE                                   │
-│                                                                      │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │                     skeleton.c                                │  │
-│  │                                                               │  │
-│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐        │  │
-│  │  │Thread 0 │  │Thread 1 │  │Thread 2 │  │Thread N │        │  │
-│  │  │         │  │         │  │         │  │         │        │  │
-│  │  │ Insert  │  │ Search  │  │ Delete  │  │  Mixed  │        │  │
-│  │  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘        │  │
-│  │       │            │            │            │               │  │
-│  │       └────────────┴────────────┴────────────┘               │  │
-│  │                         │                                     │  │
-│  │                   Direct Access                               │  │
-│  │                    (no syscalls)                              │  │
-│  └─────────────────────────┼─────────────────────────────────────┘  │
-│                            │                                         │
-│                            ↓                                         │
-├─────────────────────────────────────────────────────────────────────┤
-│                       BPF ARENA                                      │
-│              (Shared Memory - up to 4GB)                             │
-│                                                                      │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │  Page 0: Data Structure Head                                 │  │
-│  │    • ds_list_head (or ds_tree_head, etc.)                    │  │
-│  │    • Statistics counters                                     │  │
-│  │    • Control variables                                       │  │
-│  ├──────────────────────────────────────────────────────────────┤  │
-│  │  Pages 1-N: Dynamically Allocated Nodes                      │  │
-│  │                                                               │  │
-│  │    Node 1          Node 2          Node 3                    │  │
-│  │  ┌────────┐      ┌────────┐      ┌────────┐                 │  │
-│  │  │key: 42 │  ┌──→│key: 73 │  ┌──→│key: 91 │                 │  │
-│  │  │val: 84 │  │   │val: 146│  │   │val: 182│                 │  │
-│  │  │next: ───┼──┘   │next: ───┼──┘   │next:NULL                │  │
-│  │  └────────┘      └────────┘      └────────┘                 │  │
-│  │                                                               │  │
-│  │  Memory allocated by: bpf_arena_alloc()                      │  │
-│  │  Memory freed by: bpf_arena_free()                           │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-│                            ↑                                         │
-│                      Access from both:                               │
-│                            │                                         │
-├─────────────────────────────────────────────────────────────────────┤
-│                       KERNEL SPACE                                   │
-│                                                                      │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │                   skeleton.bpf.c                              │  │
-│  │                                                               │  │
-│  │  ┌────────────────────┐         ┌────────────────────┐      │  │
-│  │  │  Tracepoints       │         │  Manual Triggers   │      │  │
-│  │  │                    │         │                    │      │  │
-│  │  │  sys_enter_execve  │         │  manual_operation  │      │  │
-│  │  │  → Insert op       │         │  batch_operations  │      │  │
-│  │  │                    │         │  verify_structure  │      │  │
-│  │  │  sys_enter_exit    │         │  reset_structure   │      │  │
-│  │  │  → Delete op       │         │                    │      │  │
-│  │  └────────────────────┘         └────────────────────┘      │  │
-│  │                                                               │  │
-│  │               handle_operation()                              │  │
-│  │                      ↓                                        │  │
-│  │          Dispatch to DS operations                            │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                         USER SPACE                              │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │       skeleton.c / skeleton_msqueue.c                    │   │
+│  │                                                          │   │
+│  │  ┌────────────────────────────────────────────────────┐  │   │
+│  │  │  Main Thread (Single-threaded reader)             │  │   │
+│  │  │                                                    │  │   │
+│  │  │  1. Sleep for N seconds (default: 5)              │  │   │
+│  │  │  2. Read data structure from arena                │  │   │
+│  │  │  3. Iterate and print elements                    │  │   │
+│  │  │  4. Print statistics                              │  │   │
+│  │  │  5. Optionally verify integrity                   │  │   │
+│  │  └────────────────────┬───────────────────────────────┘  │   │
+│  │                       │                                  │   │
+│  │                 Direct Access                            │   │
+│  │                  (read-only)                             │   │
+│  └───────────────────────┼──────────────────────────────────┘   │
+│                            │                                    │
+│                            ↓                                    │
+├─────────────────────────────────────────────────────────────────┤
+│                       BPF ARENA                                 │
+│              (Shared Memory - up to 4GB)                        │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  Page 0: Data Structure Head                             │   │
+│  │    • ds_list_head (or ds_tree_head, etc.)                │   │
+│  │    • Statistics counters                                 │   │
+│  │    • Control variables                                   │   │
+│  ├──────────────────────────────────────────────────────────┤   │
+│  │  Pages 1-N: Dynamically Allocated Nodes                  │   │
+│  │                                                          │   │
+│  │    Node 1          Node 2          Node 3                │   │
+│  │  ┌────────┐      ┌────────┐      ┌────────┐              │   │
+│  │  │key: 42 │  ┌──→│key: 73 │  ┌──→│key: 91 │              │   │
+│  │  │val: 84 │  │   │val: 146│  │   │val: 182│              │   │
+│  │  │next: ───┼──┘   │next: ───┼──┘   │next:NULL            │   │
+│  │  └────────┘      └────────┘      └────────┘              │   │
+│  │                                                          │   │
+│  │  Memory allocated by: bpf_arena_alloc()                  │   │
+│  │  Memory freed by: bpf_arena_free()                       │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                            ↑                                    │
+│                      Access from both:                          │
+│                            │                                    │
+├─────────────────────────────────────────────────────────────────┤
+│                       KERNEL SPACE                              │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │       skeleton.bpf.c / skeleton_msqueue.bpf.c            │   │
+│  │                                                          │   │
+│  │  ┌────────────────────────────────────────────────────┐  │   │
+│  │  │  LSM Hook: lsm.s/inode_create                      │  │   │
+│  │  │                                                    │  │   │
+│  │  │  Triggers on: File creation                        │  │   │
+│  │  │  Action: Insert (pid, timestamp) into data struct  │  │   │
+│  │  │                                                    │  │   │
+│  │  │  Uses: ds_list_insert() or ds_msqueue_insert()    │  │   │
+│  │  │                                                    │  │   │
+│  │  │  Automatically increments counters:                │  │   │
+│  │  │    - total_kernel_ops                              │  │   │
+│  │  │    - total_kernel_failures (on error)              │  │   │
+│  │  └────────────────────────────────────────────────────┘  │   │
+│  │                                                          │   │
+│  │          Direct DS operation calls                       │   │
+│  │          (no operation dispatch needed)                  │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Component Interaction Flow
@@ -198,11 +202,11 @@ BPF Program Allocates Memory:
            └── NO                   │
                │                    │
                ↓                    │
-        ┌──────────────┐           │
-        │ Allocate new │           │
-        │ page from    │           │
-        │ kernel       │           │
-        └──────┬───────┘           │
+        ┌──────────────┐            │
+        │ Allocate new │            │
+        │ page from    │            │
+        │ kernel       │            │
+        └──────┬───────┘            │
                │                    │
                └────────────────────┤
                                     ↓
@@ -211,11 +215,11 @@ BPF Program Allocates Memory:
                           │ to arena memory │
                           └─────────────────┘
                                     ↓
-                            ┌──────────────┐
-                            │ Update stats │
+                            ┌─────────────────┐
+                            │ Update stats    │
                             │ • total_allocs++│
-                            │ • bytes_alloc+=│
-                            └──────────────┘
+                            │ • bytes_alloc+= │
+                            └─────────────────┘
 
 BPF Program Frees Memory:
 
@@ -292,12 +296,12 @@ Test Execution:
 ┌──────────────────────────────────────┐
 │ All threads start simultaneously     │
 │                                      │
-│ Thread 1   Thread 2   ...   Thread N│
-│    ↓           ↓              ↓     │
-│ for i in ops:                       │
-│   • Generate key                    │
-│   • Perform operation               │
-│   • Update stats                    │
+│ Thread 1   Thread 2   ...   Thread N │
+│    ↓           ↓              ↓      │
+│ for i in ops:                        │
+│   • Generate key                     │
+│   • Perform operation                │
+│   • Update stats                     │
 └──────┬───────────────────────────────┘
        │
        ↓

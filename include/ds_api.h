@@ -86,6 +86,11 @@ struct ds_stats {
 	__u64 memory_used;            /* Bytes of arena memory used */
 };
 
+struct ds_kv {
+	__u64 key;
+	__u64 value;
+};
+
 /* ========================================================================
  * STANDARD API INTERFACE DEFINITION
  * ======================================================================== */
@@ -178,8 +183,7 @@ struct ds_stats {
  */
 struct ds_operation {
 	enum ds_op_type type;
-	__u64 key;             /* pid */
-	__u64 value;           /* timestamp */
+	struct ds_kv kv;          /* Key-value pair for insert/delete/search */
 
 	int result;                  /* Operation result */
 };

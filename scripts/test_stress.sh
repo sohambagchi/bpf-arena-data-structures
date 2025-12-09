@@ -1,6 +1,16 @@
 #!/bin/bash
 # Stress test for BPF Arena Data Structure Framework
 # Tests with high concurrency and many operations
+#
+# NOTE: This script is a TEMPLATE for a multi-threaded implementation.
+# The current skeleton implementation uses a simpler design:
+# - Kernel: LSM hook inserts on file creation
+# - Userspace: Single-threaded reader (sleeps, then reads)
+# 
+# Command-line options like -t, -o, -w are for future multi-threaded versions.
+# To test the current implementation, use:
+#   sudo ./skeleton -d 30
+#   sudo ./skeleton_msqueue -d 30
 
 set -e
 
