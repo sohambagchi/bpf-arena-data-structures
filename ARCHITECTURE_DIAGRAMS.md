@@ -10,13 +10,13 @@
 │  │       skeleton.c / skeleton_msqueue.c                    │   │
 │  │                                                          │   │
 │  │  ┌────────────────────────────────────────────────────┐  │   │
-│  │  │  Main Thread (Single-threaded reader)             │  │   │
+│  │  │  Main Thread (Single-threaded reader)              │  │   │
 │  │  │                                                    │  │   │
-│  │  │  1. Sleep for N seconds (default: 5)              │  │   │
-│  │  │  2. Read data structure from arena                │  │   │
-│  │  │  3. Iterate and print elements                    │  │   │
-│  │  │  4. Print statistics                              │  │   │
-│  │  │  5. Optionally verify integrity                   │  │   │
+│  │  │  1. Sleep for N seconds (default: 5)               │  │   │
+│  │  │  2. Read data structure from arena                 │  │   │
+│  │  │  3. Iterate and print elements                     │  │   │
+│  │  │  4. Print statistics                               │  │   │
+│  │  │  5. Optionally verify integrity                    │  │   │
 │  │  └────────────────────┬───────────────────────────────┘  │   │
 │  │                       │                                  │   │
 │  │                 Direct Access                            │   │
@@ -61,7 +61,7 @@
 │  │  │  Triggers on: File creation                        │  │   │
 │  │  │  Action: Insert (pid, timestamp) into data struct  │  │   │
 │  │  │                                                    │  │   │
-│  │  │  Uses: ds_list_insert() or ds_msqueue_insert()    │  │   │
+│  │  │  Uses: ds_list_insert() or ds_msqueue_insert()     │  │   │
 │  │  │                                                    │  │   │
 │  │  │  Automatically increments counters:                │  │   │
 │  │  │    - total_kernel_ops                              │  │   │
@@ -105,12 +105,12 @@
           │
           ├──────────────────┬──────────────────┐
           ↓                  ↓                  ↓
-    ┌──────────┐      ┌──────────┐      ┌──────────┐
-    │ Thread 1 │      │ Thread 2 │      │ skeleton │
-    │(userspace)│     │(userspace)│     │  .bpf.c  │
-    │          │      │          │      │ (kernel) │
-    │ Insert() │      │ Search() │      │ Delete() │
-    └──────────┘      └──────────┘      └──────────┘
+    ┌───────────┐      ┌───────────┐      ┌──────────┐
+    │ Thread 1  │      │ Thread 2  │      │ skeleton │
+    │(userspace)│      │(userspace)│      │  .bpf.c  │
+    │           │      │           │      │ (kernel) │
+    │ Insert()  │      │ Search()  │      │ Delete() │
+    └───────────┘      └───────────┘      └──────────┘
           │                  │                  │
           └──────────────────┴──────────────────┘
                              │
