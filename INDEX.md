@@ -15,7 +15,7 @@
   - Success checklist
 
 ### For Users
-- **`README_FRAMEWORK.md`** - Framework overview
+- **`README.md`** - Framework overview
   - What it does
   - Quick start
   - Usage examples
@@ -32,32 +32,25 @@
   - Agent-friendly instructions
 
 ### Visual References
-- **`ARCHITECTURE_DIAGRAMS.md`** - System diagrams
+- **`.agent/ARCHITECTURE_DIAGRAMS.md`** - System diagrams
   - Component interaction
   - Memory layout
   - Data flow
   - Build pipeline
-
-### Project Information
-- **`PROJECT_SUMMARY.md`** - Build summary
-  - What was built
-  - Statistics
-  - Design decisions
-  - Completion status
 
 ---
 
 ## 💻 Source Code
 
 ### Core Library
-- **`libarena_ds.h`** - Arena memory allocator
+- **`include/libarena_ds.h`** - Arena memory allocator
   - Per-CPU allocation
   - Statistics tracking
   - Atomic operations
   - ~300 lines, fully documented
 
 ### API Template
-- **`ds_api.h`** - Standard interface
+- **`include/ds_api.h`** - Standard interface
   - Operation definitions
   - Result codes
   - Statistics structures
@@ -65,45 +58,45 @@
   - ~400 lines with examples
 
 ### Reference Implementations
-- **`ds_list.h`** - Doubly-linked list
+- **`include/ds_list.h`** - Doubly-linked list
   - Complete implementation
   - All API operations
   - Lock-free operations with atomics
   - ~352 lines
 
-- **`ds_msqueue.h`** - Michael-Scott queue
+- **`include/ds_msqueue.h`** - Michael-Scott queue
   - Non-blocking FIFO queue
   - Lock-free enqueue/dequeue
   - Based on M&S 1996 paper
   - ~507 lines
 
 ### Test Framework
-- **`skeleton.bpf.c`** - Kernel-side BPF program (list)
+- **`src/skeleton.bpf.c`** - Kernel-side BPF program (list)
   - Arena map definition
   - LSM hook on inode_create
   - Operation dispatch
   - ~170 lines
 
-- **`skeleton.c`** - Userspace test driver (list)
+- **`src/skeleton.c`** - Userspace test driver (list)
   - Single-threaded reader
   - Sleep then read pattern
   - Statistics collection
   - ~270 lines
 
-- **`skeleton_msqueue.bpf.c`** - Kernel-side BPF program (MS queue)
+- **`src/skeleton_msqueue.bpf.c`** - Kernel-side BPF program (MS queue)
   - Arena map definition
   - LSM hook on inode_create
   - MS queue operations
   - ~165 lines
 
-- **`skeleton_msqueue.c`** - Userspace test driver (MS queue)
+- **`src/skeleton_msqueue.c`** - Userspace test driver (MS queue)
   - Single-threaded reader
   - Sleep then read pattern
   - Queue-specific operations
   - ~300 lines
 
 ### Build System
-- **`Makefile.new`** - Annotated build system
+- **`Makefile`** - Build system
   - All build stages documented
   - Multiple targets
   - ~350 lines
@@ -113,38 +106,34 @@
 ## 🧪 Testing
 
 ### Test Scripts (executable)
-- **`test_smoke.sh`** - Quick validation (~30 seconds)
-- **`test_stress.sh`** - Heavy load testing (~5 minutes)
-- **`test_verify.sh`** - Correctness verification
-- **`benchmark.sh`** - Performance measurement
+- **`scripts/test_smoke.sh`** - Quick validation (~30 seconds)
+- **`scripts/test_stress.sh`** - Heavy load testing (~5 minutes)
+- **`scripts/test_verify.sh`** - Correctness verification
+- **`scripts/benchmark.sh`** - Performance measurement
 
 ### How to Run Tests
 ```bash
 # Quick check
-sudo ./test_smoke.sh
+sudo ./scripts/test_smoke.sh
 
 # Thorough testing
-sudo ./test_stress.sh
+sudo ./scripts/test_stress.sh
 
 # Verify correctness
-sudo ./test_verify.sh
+sudo ./scripts/test_verify.sh
 
 # Measure performance
-sudo ./benchmark.sh
+sudo ./scripts/benchmark.sh
 ```
 
 ---
 
-## 🔧 Reference Files (Original Examples)
+## 🔧 Common Definitions
 
-These files are kept as reference examples:
+These files provide BPF compatibility:
 
-- **`arena_list.bpf.c`** - Original BPF example
-- **`arena_list.c`** - Original userspace example
-- **`bpf_arena_list.h`** - Original list implementation
-- **`bpf_arena_alloc.h`** - Original allocator
-- **`bpf_arena_common.h`** - Common definitions (used)
-- **`bpf_experimental.h`** - BPF features (used)
+- **`include/bpf_arena_common.h`** - Common definitions for BPF/userspace
+- **`include/bpf_experimental.h`** - BPF experimental features
 
 ---
 
@@ -152,34 +141,33 @@ These files are kept as reference examples:
 
 ### "I want to use this framework"
 1. `QUICKSTART.md` (5 min)
-2. Build and run: `make -f Makefile.new && sudo ./skeleton -t 4 -o 1000`
-3. `README_FRAMEWORK.md` (10 min)
+2. Build and run: `make && sudo ./skeleton -d 5`
+3. `README.md` (10 min)
 4. Relevant sections of `GUIDE.md` as needed
 
 ### "I want to add a data structure"
 1. `QUICKSTART.md` for basic setup
 2. `GUIDE.md` → "Adding New Data Structures" section
-3. Study `ds_list.h` as reference
-4. Follow markers in `skeleton.bpf.c` and `skeleton.c`
+3. Study `include/ds_list.h` as reference
+4. Follow markers in `src/skeleton.bpf.c` and `src/skeleton.c`
 5. Build and test
 
 ### "I want to understand the architecture"
-1. `README_FRAMEWORK.md` → Architecture section
-2. `ARCHITECTURE_DIAGRAMS.md` → All diagrams
+1. `README.md` → Architecture section
+2. `.agent/ARCHITECTURE_DIAGRAMS.md` → All diagrams
 3. `GUIDE.md` → Architecture section
 4. Read source code with understanding of flow
 
 ### "I'm automating/building tools"
 1. `GUIDE.md` → "Agent-Friendly Instructions"
-2. `ds_api.h` → Study API patterns
-3. `PROJECT_SUMMARY.md` → Design decisions
-4. `ARCHITECTURE_DIAGRAMS.md` → Build pipeline
+2. `include/ds_api.h` → Study API patterns
+3. `.agent/ARCHITECTURE_DIAGRAMS.md` → Build pipeline
 
 ### "I'm debugging issues"
 1. `GUIDE.md` → "Troubleshooting" section
 2. Check test output and error messages
-3. `ARCHITECTURE_DIAGRAMS.md` → Flow diagrams
-4. Run with single thread: `sudo ./skeleton -t 1 -o 100`
+3. `.agent/ARCHITECTURE_DIAGRAMS.md` → Flow diagrams
+4. Run with short duration: `sudo ./skeleton -d 1`
 5. Check `dmesg` for kernel messages
 
 ---
@@ -188,6 +176,9 @@ These files are kept as reference examples:
 
 ### Build
 ```bash
+# First time only: initialize submodules
+git submodule update --init --recursive
+
 make              # Build all
 make skeleton     # Build skeleton only
 make clean        # Clean build
@@ -212,11 +203,11 @@ sudo ./skeleton -d 10 -s
 
 ### Test
 ```bash
-sudo ./test_smoke.sh          # Quick (~30s)
-sudo ./test_stress.sh         # Thorough (~5min)
-sudo ./test_verify.sh         # Correctness
-sudo ./benchmark.sh           # Performance
-make -f Makefile.new test     # Via Makefile
+sudo ./scripts/test_smoke.sh          # Quick (~30s)
+sudo ./scripts/test_stress.sh         # Thorough (~5min)
+sudo ./scripts/test_verify.sh         # Correctness
+sudo ./scripts/benchmark.sh           # Performance
+make test                             # Via Makefile
 ```
 
 ---
@@ -224,45 +215,42 @@ make -f Makefile.new test     # Via Makefile
 ## 📁 Directory Structure
 
 ```
-bpf_arena/
+bpf-arena-data-structures/
 │
 ├── Documentation/
 │   ├── QUICKSTART.md              ⭐ Start here for beginners
-│   ├── README_FRAMEWORK.md        ⭐ Framework overview
+│   ├── README.md                  ⭐ Framework overview
 │   ├── GUIDE.md                   ⭐ Complete reference
-│   ├── ARCHITECTURE_DIAGRAMS.md   ⭐ Visual guides
-│   ├── PROJECT_SUMMARY.md         ⭐ Build summary
 │   ├── INDEX.md                   ⭐ This file
-│   ├── README.md                  (Original example readme)
-│   └── README.zh.md               (Chinese translation)
+│   └── .agent/
+│       └── ARCHITECTURE_DIAGRAMS.md   Visual guides
 │
-├── Core Library/
+├── include/                       ⭐ Header files
 │   ├── libarena_ds.h              ⭐ Memory allocator
 │   ├── ds_api.h                   ⭐ API template
+│   ├── ds_list.h                  ⭐ Reference: linked list
+│   ├── ds_msqueue.h               ⭐ Michael-Scott queue
 │   ├── bpf_arena_common.h         Common definitions
 │   └── bpf_experimental.h         BPF features
 │
-├── Implementations/
-│   ├── ds_list.h                  ⭐ Reference: linked list
-│   └── (add your ds_<name>.h here)
+├── src/                           ⭐ Source files
+│   ├── skeleton.bpf.c             ⭐ Kernel-side driver (list)
+│   ├── skeleton.c                 ⭐ Userspace driver (list)
+│   ├── skeleton_msqueue.bpf.c     ⭐ Kernel-side driver (queue)
+│   └── skeleton_msqueue.c         ⭐ Userspace driver (queue)
 │
-├── Test Framework/
-│   ├── skeleton.bpf.c             ⭐ Kernel-side driver
-│   ├── skeleton.c                 ⭐ Userspace driver
-│   ├── Makefile.new               ⭐ Build system
-│   └── Makefile                   (Original makefile)
-│
-├── Testing/
+├── scripts/                       ⭐ Test scripts
 │   ├── test_smoke.sh              ⭐ Smoke tests
 │   ├── test_stress.sh             ⭐ Stress tests
 │   ├── test_verify.sh             ⭐ Verification tests
 │   └── benchmark.sh               ⭐ Benchmarks
 │
-└── Reference Examples/
-    ├── arena_list.bpf.c           Original BPF example
-    ├── arena_list.c               Original userspace
-    ├── bpf_arena_list.h           Original list impl
-    └── bpf_arena_alloc.h          Original allocator
+├── Makefile                       ⭐ Build system
+│
+└── third_party/                   Dependencies
+    ├── libbpf/
+    ├── bpftool/
+    └── vmlinux/
 ```
 
 ⭐ = Core framework files you'll use
@@ -280,10 +268,10 @@ bpf_arena/
 → `GUIDE.md` → "Adding New Data Structures"
 
 **...understand the architecture?**
-→ `ARCHITECTURE_DIAGRAMS.md` + `GUIDE.md` → "Architecture"
+→ `.agent/ARCHITECTURE_DIAGRAMS.md` + `GUIDE.md` → "Architecture"
 
 **...run tests?**
-→ `README_FRAMEWORK.md` → "Running Tests"
+→ `README.md` → "Running Tests"
 
 **...fix build errors?**
 → `GUIDE.md` → "Troubleshooting" → "Compilation Issues"
@@ -292,7 +280,7 @@ bpf_arena/
 → `GUIDE.md` → "Troubleshooting" → "Runtime Issues"
 
 **...interpret test output?**
-→ `README_FRAMEWORK.md` → "Understanding Test Output"
+→ `README.md` → "Understanding Test Output"
 
 **...improve performance?**
 → `GUIDE.md` → "Troubleshooting" → "Performance Issues"
@@ -306,13 +294,13 @@ bpf_arena/
 → `GUIDE.md` → "Overview" or `README.md` (original tutorial)
 
 **...the skeleton pattern?**
-→ `README_FRAMEWORK.md` → "Architecture"
+→ `README.md` → "Architecture"
 
 **...libarena_ds.h?**
-→ Open `libarena_ds.h` - documented inline
+→ Open `include/libarena_ds.h` - documented inline
 
 **...ds_api.h?**
-→ Open `ds_api.h` - has usage examples
+→ Open `include/ds_api.h` - has usage examples
 
 **...the expected output?**
 → `QUICKSTART.md` → "Understanding the Output"
@@ -329,7 +317,7 @@ Detailed Info → GUIDE.md (relevant section)
       ↓
 Still Stuck → Read source code comments
       ↓
-Architecture → ARCHITECTURE_DIAGRAMS.md
+Architecture → .agent/ARCHITECTURE_DIAGRAMS.md
 ```
 
 ### Debugging Chain
@@ -338,11 +326,11 @@ Error Occurred → Check error message
       ↓
 Common Issue? → GUIDE.md → Troubleshooting
       ↓
-Build Issue? → Check Makefile.new comments
+Build Issue? → Check Makefile comments
       ↓
 Runtime Issue? → Check dmesg: sudo dmesg | tail
       ↓
-Logic Issue? → Review ARCHITECTURE_DIAGRAMS.md flows
+Logic Issue? → Review .agent/ARCHITECTURE_DIAGRAMS.md flows
 ```
 
 ---
@@ -352,16 +340,16 @@ Logic Issue? → Review ARCHITECTURE_DIAGRAMS.md flows
 ### Before Starting
 - [ ] Read `QUICKSTART.md`
 - [ ] Verified prerequisites (kernel 6.10+, clang 15+)
-- [ ] Built successfully: `make -f Makefile.new`
-- [ ] Ran basic test: `sudo ./skeleton -t 4 -o 1000`
+- [ ] Built successfully: `make`
+- [ ] Ran basic test: `sudo ./skeleton -d 5`
 
 ### Adding Data Structure
-- [ ] Created `ds_<name>.h` with all API operations
-- [ ] Modified `skeleton.bpf.c` at marked insertion points
-- [ ] Modified `skeleton.c` to use new data structure
+- [ ] Created `include/ds_<name>.h` with all API operations
+- [ ] Modified `src/skeleton.bpf.c` at marked insertion points
+- [ ] Modified `src/skeleton.c` to use new data structure
 - [ ] Built without errors
-- [ ] Passed smoke tests: `sudo ./test_smoke.sh`
-- [ ] Passed verification: `sudo ./skeleton -t 4 -o 1000 -v`
+- [ ] Passed smoke tests: `sudo ./scripts/test_smoke.sh`
+- [ ] Passed verification: `sudo ./skeleton -d 5 -v`
 
 ### Before Production
 - [ ] Passed all smoke tests
@@ -378,18 +366,18 @@ Logic Issue? → Review ARCHITECTURE_DIAGRAMS.md flows
 ### Level 1: User (1 hour)
 1. Read `QUICKSTART.md`
 2. Build and run basic test
-3. Experiment with different options (-t, -o, -w)
+3. Experiment with different options (-d duration, -v verify, -s stats)
 4. Understand the output
 
 ### Level 2: Developer (4 hours)
 1. Read `GUIDE.md` thoroughly
-2. Study `ds_list.h` implementation
+2. Study `include/ds_list.h` implementation
 3. Add a simple data structure (e.g., stack)
 4. Run all tests
 
 ### Level 3: Expert (1 day)
-1. Understand arena allocator (`libarena_ds.h`)
-2. Study BPF program (`skeleton.bpf.c`)
+1. Understand arena allocator (`include/libarena_ds.h`)
+2. Study BPF program (`src/skeleton.bpf.c`)
 3. Add complex data structure (e.g., AVL tree)
 4. Optimize for performance
 5. Write custom tests
@@ -406,31 +394,31 @@ Logic Issue? → Review ARCHITECTURE_DIAGRAMS.md flows
 
 ### Testing Workflow
 ```bash
-1. make -f Makefile.new clean
-2. make -f Makefile.new
-3. sudo ./test_smoke.sh
-4. sudo ./skeleton -t 4 -o 1000 -v
-5. sudo ./benchmark.sh
+1. make clean
+2. make
+3. sudo ./scripts/test_smoke.sh
+4. sudo ./skeleton -d 5 -v
+5. sudo ./scripts/benchmark.sh
 ```
 
 ### Development Workflow
 ```bash
-1. Edit ds_<name>.h
-2. Update skeleton.bpf.c (marked points)
-3. Update skeleton.c (types and calls)
-4. make -f Makefile.new
-5. sudo ./skeleton -t 1 -o 100  # Quick test
-6. sudo ./skeleton -t 4 -o 1000 -v  # Full test
-7. sudo ./test_smoke.sh  # Validation
+1. Edit include/ds_<name>.h
+2. Update src/skeleton.bpf.c (marked points)
+3. Update src/skeleton.c (types and calls)
+4. make
+5. sudo ./skeleton -d 1  # Quick test
+6. sudo ./skeleton -d 5 -v  # Full test
+7. sudo ./scripts/test_smoke.sh  # Validation
 ```
 
 ### Debugging Workflow
 ```bash
 1. Reproduce issue with minimal test
 2. Check GUIDE.md troubleshooting
-3. Run with V=1: make -f Makefile.new V=1
+3. Run with V=1: make V=1
 4. Check kernel logs: sudo dmesg | tail -50
-5. Run single-threaded: sudo ./skeleton -t 1 -o 10
+5. Run short duration: sudo ./skeleton -d 1
 6. Add debug prints (bpf_printk in BPF, printf in userspace)
 ```
 
@@ -440,18 +428,21 @@ Logic Issue? → Review ARCHITECTURE_DIAGRAMS.md flows
 
 | File | Type | Lines | Purpose |
 |------|------|-------|---------|
-| `libarena_ds.h` | Code | ~300 | Memory allocator |
-| `ds_api.h` | Code | ~400 | API template |
-| `ds_list.h` | Code | ~450 | List implementation |
-| `skeleton.bpf.c` | Code | ~300 | Kernel driver |
-| `skeleton.c` | Code | ~700 | Userspace driver |
-| `Makefile.new` | Build | ~350 | Build system |
-| `GUIDE.md` | Doc | ~1000 | Complete guide |
-| `QUICKSTART.md` | Doc | ~400 | Quick start |
-| `README_FRAMEWORK.md` | Doc | ~350 | Overview |
+| `include/libarena_ds.h` | Code | ~300 | Memory allocator |
+| `include/ds_api.h` | Code | ~400 | API template |
+| `include/ds_list.h` | Code | ~450 | List implementation |
+| `include/ds_msqueue.h` | Code | ~507 | MS Queue implementation |
+| `src/skeleton.bpf.c` | Code | ~170 | Kernel driver (list) |
+| `src/skeleton.c` | Code | ~270 | Userspace driver (list) |
+| `src/skeleton_msqueue.bpf.c` | Code | ~165 | Kernel driver (queue) |
+| `src/skeleton_msqueue.c` | Code | ~300 | Userspace driver (queue) |
+| `Makefile` | Build | ~350 | Build system |
+| `GUIDE.md` | Doc | ~800 | Complete guide |
+| `QUICKSTART.md` | Doc | ~320 | Quick start |
+| `README.md` | Doc | ~350 | Overview |
 | Test scripts | Shell | ~400 | Testing |
 
-**Total**: ~4,650 lines of code and documentation
+**Total**: ~4,800 lines of code and documentation
 
 ---
 
@@ -460,7 +451,7 @@ Logic Issue? → Review ARCHITECTURE_DIAGRAMS.md flows
 Pick your starting point based on your goal:
 
 - **Just want to use it?** → Start with `QUICKSTART.md`
-- **Want to understand it?** → Start with `ARCHITECTURE_DIAGRAMS.md`
+- **Want to understand it?** → Start with `.agent/ARCHITECTURE_DIAGRAMS.md`
 - **Want to extend it?** → Start with `GUIDE.md` section on adding data structures
 - **Want to automate it?** → Start with `GUIDE.md` agent instructions
 

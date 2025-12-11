@@ -5,6 +5,9 @@ A comprehensive framework for testing concurrent data structures using **BPF are
 ## 🎯 Quick Start
 
 ```bash
+# Initialize third-party dependencies (first time only)
+git submodule update --init --recursive
+
 # Build everything
 make
 
@@ -47,12 +50,15 @@ cat GUIDE.md
 
 ### Documentation
 
+- **`README.md`** - This file
 - **`GUIDE.md`** - Comprehensive guide (architecture, adding data structures, conventions)
-- **`README_FRAMEWORK.md`** - This file
+- **`QUICKSTART.md`** - Quick start guide
+- **`INDEX.md`** - Navigation index
+- **`.agent/ARCHITECTURE_DIAGRAMS.md`** - Visual diagrams
 
 ### Build System
 
-- **`Makefile.new`** - Annotated Makefile with all build rules
+- **`Makefile`** - Build system
 
 ## 🏗️ Architecture
 
@@ -154,7 +160,7 @@ clang --version
 
 ## 🔧 Adding New Data Structures
 
-### 1. Create Data Structure Header (`ds_<name>.h`)
+### 1. Create Data Structure Header (`include/ds_<name>.h`)
 
 ```c
 #pragma once
@@ -183,14 +189,14 @@ struct ds_<name>_head {
 // - ds_<name>_get_metadata()
 ```
 
-### 2. Modify `skeleton.bpf.c`
+### 2. Modify `src/skeleton.bpf.c`
 
 Look for `/* DS_API_INSERT */` markers and add:
 - Include your header
 - Declare your data structure head
 - Update operation dispatch in `handle_operation()`
 
-### 3. Modify `skeleton.c`
+### 3. Modify `src/skeleton.c`
 
 - Include your header
 - Update worker context type
@@ -261,14 +267,13 @@ bpf-arena-data-structures/
 │   ├── GUIDE.md                # Comprehensive guide ⭐
 │   ├── QUICKSTART.md           # Quick start guide
 │   ├── INDEX.md                # Navigation index
-│   ├── PROJECT_SUMMARY.md      # Project summary
-│   └── ARCHITECTURE_DIAGRAMS.md # Visual diagrams
+│   └── .agent/ARCHITECTURE_DIAGRAMS.md # Visual diagrams
 │
-├── Test Scripts (Templates)
-│   ├── test_smoke.sh           # Smoke tests (template)
-│   ├── test_stress.sh          # Stress tests (template)
-│   ├── test_verify.sh          # Verification tests (template)
-│   └── benchmark.sh            # Performance benchmarks (template)
+├── Test Scripts
+│   ├── scripts/test_smoke.sh           # Smoke tests
+│   ├── scripts/test_stress.sh          # Stress tests
+│   ├── scripts/test_verify.sh          # Verification tests
+│   └── scripts/benchmark.sh            # Performance benchmarks
 │
 └── Third Party Dependencies
     └── third_party/
@@ -350,7 +355,6 @@ bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
 - **Comprehensive Guide**: See `GUIDE.md` for detailed documentation
 - **Linux BPF Arena**: `Documentation/bpf/arena.rst` in kernel source
 - **libbpf**: https://libbpf.readthedocs.io/
-- **Original Example**: See `arena_list.bpf.c` and `arena_list.c`
 
 ## 🤝 For Agents and Automation
 
@@ -365,20 +369,23 @@ This framework is designed to be agent-friendly:
 ## ⚡ Quick Reference
 
 ```bash
+# First time setup
+git submodule update --init --recursive
+
 # Build
-make -f Makefile.new
+make
 
 # Test
-sudo ./skeleton -t 4 -o 1000 -w mixed -v
+sudo ./skeleton -d 5 -v
 
 # Automated testing
-sudo ./test_smoke.sh      # Quick (~30s)
-sudo ./test_stress.sh     # Thorough (~5min)
-sudo ./test_verify.sh     # Correctness
-sudo ./benchmark.sh       # Performance
+sudo ./scripts/test_smoke.sh      # Quick (~30s)
+sudo ./scripts/test_stress.sh     # Thorough (~5min)
+sudo ./scripts/test_verify.sh     # Correctness
+sudo ./scripts/benchmark.sh       # Performance
 
 # Clean
-make -f Makefile.new clean
+make clean
 ```
 
 ## 📝 License

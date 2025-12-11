@@ -343,31 +343,31 @@ Test Execution:
 ## File Dependencies
 
 ```
-skeleton.c
+src/skeleton.c
     │
     ├─→ skeleton.skel.h (generated)
     │       │
     │       └─→ skeleton.bpf.o (generated)
     │               │
-    │               └─→ skeleton.bpf.c
+    │               └─→ src/skeleton.bpf.c
     │                       │
-    │                       ├─→ ds_list.h
+    │                       ├─→ include/ds_list.h
     │                       │       │
-    │                       │       └─→ ds_api.h
+    │                       │       └─→ include/ds_api.h
     │                       │               │
-    │                       │               └─→ libarena_ds.h
+    │                       │               └─→ include/libarena_ds.h
     │                       │                       │
-    │                       │                       └─→ bpf_arena_common.h
+    │                       │                       └─→ include/bpf_arena_common.h
     │                       │
     │                       └─→ vmlinux.h
     │
-    ├─→ ds_list.h
+    ├─→ include/ds_list.h
     │       │
-    │       └─→ ds_api.h
+    │       └─→ include/ds_api.h
     │               │
-    │               └─→ libarena_ds.h
+    │               └─→ include/libarena_ds.h
     │                       │
-    │                       └─→ bpf_arena_common.h
+    │                       └─→ include/bpf_arena_common.h
     │
     └─→ libbpf.a
 ```
@@ -377,11 +377,11 @@ skeleton.c
 ```
 Source Files                Build Steps                Output
 
-skeleton.bpf.c    ──→  clang -target bpf      ──→  skeleton.tmp.bpf.o
+src/skeleton.bpf.c    ──→  clang -target bpf      ──→  skeleton.tmp.bpf.o
     +                  -D__TARGET_ARCH_x86
-ds_list.h              -D__BPF_FEATURE_ADDR_SPACE_CAST
+include/ds_list.h      -D__BPF_FEATURE_ADDR_SPACE_CAST
     +                  -O2 -g
-libarena_ds.h                   │
+include/libarena_ds.h           │
     +                           ↓
 vmlinux.h              bpftool gen object     ──→  skeleton.bpf.o
                                 │
@@ -389,11 +389,11 @@ vmlinux.h              bpftool gen object     ──→  skeleton.bpf.o
                        bpftool gen skeleton   ──→  skeleton.skel.h
                                                          │
                                                          ↓
-skeleton.c     ──→  gcc -c                   ──→  skeleton.o
-    +              -I. -Ioutput                         │
+src/skeleton.c     ──→  gcc -c                   ──→  skeleton.o
+    +              -I./include -Ioutput                      │
 skeleton.skel.h    -O2 -g                               │
     +                                                   ↓
-ds_list.h                                          gcc -o skeleton
+include/ds_list.h                                          gcc -o skeleton
     +                                                   │
 libarena_ds.h                                          ↓
                                                    skeleton (binary)

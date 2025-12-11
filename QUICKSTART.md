@@ -30,10 +30,13 @@ clang --version
 
 ```bash
 # Navigate to the framework directory
-cd bpf_arena/
+cd bpf-arena-data-structures/
+
+# Initialize third-party dependencies (first time only)
+git submodule update --init --recursive
 
 # Build everything (takes ~30 seconds)
-make -f Makefile.new
+make
 
 # Run a simple test (needs sudo for BPF)
 sudo ./skeleton -d 5
@@ -131,8 +134,8 @@ QUICKSTART.md          - This file
 ### Testing Scripts
 
 ```
-test_smoke.sh     - Quick tests (~30 seconds)
-test_stress.sh    - Heavy tests (~5 minutes)
+scripts/test_smoke.sh     - Quick tests (~30 seconds)
+scripts/test_stress.sh    - Heavy tests (~5 minutes)
 test_verify.sh    - Correctness checks
 benchmark.sh      - Performance measurement
 ```
@@ -143,10 +146,10 @@ benchmark.sh      - Performance measurement
 
 ```bash
 # Quick smoke tests
-sudo ./test_smoke.sh
+sudo ./scripts/test_smoke.sh
 
 # If those pass, try stress tests
-sudo ./test_stress.sh
+sudo ./scripts/test_stress.sh
 
 # Check correctness
 sudo ./test_verify.sh
@@ -171,8 +174,8 @@ Follow the guide in `GUIDE.md` → "Adding New Data Structures"
 
 Example: Add a binary search tree
 - Create `ds_tree.h`
-- Modify `skeleton.bpf.c` (3 places marked with `/* DS_API_INSERT */`)
-- Modify `skeleton.c` (update types and functions)
+- Modify `src/skeleton.bpf.c` (3 places marked with `/* DS_API_INSERT */`)
+- Modify `src/skeleton.c` (update types and functions)
 - Build and test!
 
 ## Common Issues
@@ -246,7 +249,7 @@ Functions:               ds_<name>_<op>    (e.g., ds_tree_insert)
 1. **Read GUIDE.md** - Most questions answered there
 2. **Check existing code** - `ds_list.h` is a complete example
 3. **Look for markers** - `/* DS_API_INSERT */` shows where to modify
-4. **Run tests** - `test_smoke.sh` catches common issues
+4. **Run tests** - `scripts/test_smoke.sh` catches common issues
 5. **Check dmesg** - Kernel logs show BPF errors
 
 ## Testing Workflow
@@ -256,8 +259,8 @@ Functions:               ds_<name>_<op>    (e.g., ds_tree_insert)
 vim ds_myds.h
 
 # 2. Update skeleton files (follow markers with /* DS_API_INSERT */)
-vim skeleton.bpf.c  # Add includes and dispatch
-vim skeleton.c      # Update includes and types
+vim src/skeleton.bpf.c  # Add includes and dispatch
+vim src/skeleton.c      # Update includes and types
 
 # 3. Build
 make clean && make

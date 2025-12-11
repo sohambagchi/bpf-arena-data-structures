@@ -40,43 +40,43 @@ This framework provides a testing infrastructure for **concurrent data structure
 ### Component Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     USER SPACE                               │
-├─────────────────────────────────────────────────────────────┤
-│  skeleton.c                                                  │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
-│  │  Thread 1   │  │  Thread 2   │  │  Thread N   │        │
-│  │  (insert)   │  │  (search)   │  │  (delete)   │        │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘        │
-│         │                │                │                 │
-│         └────────────────┴────────────────┘                 │
-│                          │                                   │
-│                    Direct Access                            │
-│                          │                                   │
-├──────────────────────────┼───────────────────────────────────┤
-│                    BPF ARENA                                 │
-│              (Shared Memory Region)                          │
-│                                                              │
-│  ┌──────────────────────────────────────────────────┐      │
-│  │  Data Structure (ds_list, ds_tree, etc.)         │      │
-│  │  - Nodes allocated with bpf_arena_alloc()        │      │
-│  │  - Accessible from both contexts                 │      │
-│  └──────────────────────────────────────────────────┘      │
-│                          │                                   │
-├─────────────────────────────────────────────────────────────┤
-│                   KERNEL SPACE                               │
-├─────────────────────────────────────────────────────────────┤
-│  skeleton.bpf.c / skeleton_msqueue.bpf.c                    │
-│  ┌─────────────────────────────────────────────┐   │
-│  │ LSM Hook: lsm.s/inode_create            │   │
-│  │                                             │   │
-│  │ Triggers on: File creation              │   │
-│  │ Action: Insert (pid, timestamp) pair    │   │
-│  │                                             │   │
-│  │ Uses: ds_list_insert() or               │   │
-│  │       ds_msqueue_insert()                │   │
-│  └─────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│                     USER SPACE                      │
+├─────────────────────────────────────────────────────┤
+│  skeleton.c                                         │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │
+│  │  Thread 1   │  │  Thread 2   │  │  Thread N   │  │
+│  │  (insert)   │  │  (search)   │  │  (delete)   │  │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  │
+│         │                │                │         │
+│         └────────────────┴────────────────┘         │
+│                          │                          │
+│                    Direct Access                    │
+│                          │                          │
+├──────────────────────────┼──────────────────────────┤
+│                    BPF ARENA                        │
+│              (Shared Memory Region)                 │
+│                                                     │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  Data Structure (ds_list, ds_tree, etc.)      │  │
+│  │  - Nodes allocated with bpf_arena_alloc()     │  │
+│  │  - Accessible from both contexts              │  │
+│  └───────────────────────────────────────────────┘  │
+│                          │                          │
+├─────────────────────────────────────────────────────┤
+│                   KERNEL SPACE                      │
+├─────────────────────────────────────────────────────┤
+│  src/skeleton.bpf.c / src/skeleton_msqueue.bpf.c    │
+│  ┌─────────────────────────────────────────────┐    │
+│  │ LSM Hook: lsm.s/inode_create                │    │
+│  │                                             │    │
+│  │ Triggers on: File creation                  │    │
+│  │ Action: Insert (pid, timestamp) pair        │    │
+│  │                                             │    │
+│  │ Uses: ds_list_insert() or                   │    │
+│  │       ds_msqueue_insert()                   │    │
+│  └─────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────┘
 ```
 
 ### Memory Layout
@@ -90,12 +90,12 @@ Arena Virtual Address Space (up to 4GB)
 │ Page 1-N: Dynamically allocated    │ ← bpf_arena_alloc()
 │           nodes and data           │   allocates on demand
 │                                    │
-│  ┌─────────────┐  ┌─────────────┐ │
-│  │ Node 1      │  │ Node 2      │ │
-│  │ key: 100    │  │ key: 200    │ │
-│  │ value: 200  │  │ value: 400  │ │
-│  │ next: ───────→ │ next: NULL  │ │
-│  └─────────────┘  └─────────────┘ │
+│  ┌─────────────┐  ┌─────────────┐  │
+│  │ Node 1      │  │ Node 2      │  │
+│  │ key: 100    │  │ key: 200    │  │
+│  │ value: 200  │  │ value: 400  │  │
+│  │ next: ───────→ │ next: NULL  │  │
+│  └─────────────┘  └─────────────┘  │
 │                                    │
 └────────────────────────────────────┘
       ↑                    ↑
@@ -149,7 +149,10 @@ clang --version
 ### Building
 
 ```bash
-cd bpf_arena/
+cd bpf-arena-data-structures/
+
+# Initialize third-party dependencies (first time only)
+git submodule update --init --recursive
 
 # Build all programs
 make
@@ -183,10 +186,10 @@ This section walks through adding a new data structure step-by-step.
 
 ### Step 1: Create Data Structure Header
 
-Create a new file `ds_<name>.h` (e.g., `ds_tree.h` for a tree):
+Create a new file `include/ds_<name>.h` (e.g., `include/ds_tree.h` for a tree):
 
 ```c
-/* ds_tree.h - Example tree implementation */
+/* include/ds_tree.h - Example tree implementation */
 #pragma once
 
 #include "ds_api.h"
@@ -283,7 +286,7 @@ static inline const struct ds_metadata* ds_tree_get_metadata(void)
 
 ### Step 2: Modify Kernel Skeleton
 
-Edit `skeleton.bpf.c` and add your data structure:
+Edit `src/skeleton.bpf.c` and add your data structure:
 
 **1. Include the header** (line ~30):
 ```c
@@ -322,7 +325,7 @@ case DS_OP_INSERT:
 
 ### Step 3: Modify Userspace Skeleton
 
-Edit `skeleton.c` to use your data structure:
+Edit `src/skeleton.c` to use your data structure:
 
 **1. Include the header** (line ~20):
 ```c
@@ -482,9 +485,9 @@ Data Structure State:
 
 | Type | Pattern | Example |
 |------|---------|---------|
-| Data structure header | `ds_<name>.h` | `ds_list.h`, `ds_tree.h` |
-| BPF kernel program | `<name>.bpf.c` | `skeleton.bpf.c` |
-| Userspace program | `<name>.c` | `skeleton.c` |
+| Data structure header | `include/ds_<name>.h` | `include/ds_list.h`, `include/ds_tree.h` |
+| BPF kernel program | `src/<name>.bpf.c` | `src/skeleton.bpf.c` |
+| Userspace program | `src/<name>.c` | `src/skeleton.c` |
 | Generated skeleton | `<name>.skel.h` | `skeleton.skel.h` |
 
 ### Function Naming
@@ -657,7 +660,7 @@ This section provides structured information for automated agents.
     "type": "avl_tree",
     "description": "Self-balancing AVL tree",
     "files": {
-      "header": "ds_tree.h",
+      "header": "include/ds_tree.h",
       "test": "test_tree.c"
     },
     "node": {
