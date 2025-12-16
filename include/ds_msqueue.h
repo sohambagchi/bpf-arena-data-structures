@@ -134,16 +134,18 @@ static inline int __msqueue_add_node(struct ds_msqueue_elem __arena *new_node, s
 	/* Enqueue loop */
 	while (retry_count < max_retries && can_loop) {
 		/* Read tail */
-		tail = queue->tail;
+
+		// tail = arena_atomic_load(&queue->tail, ARENA_ACQUIRE); // Doesn't work, BPF doesn't support
+		tail = READ_ONCE(queue->tail);
 		cast_kern(tail);
-		next = tail->node.next;
+		next = READ_ONCE(tail->node.next);
 		
 		/* Check if tail is consistent */
 		cast_user(tail);
 		if (tail == queue->tail) {
 			cast_user(next);
 			if (next == NULL) {
-				if (arena_atomic_cmpxchg(&tail->node.next, next, &new_node->node) == next) {
+				if (arena_atomic_cmpxchg(&tail->node.next, next, &new_node->node, ARENA_ACQ_REL, ARENA_RELAXED) == next) {
 					break;
 				}
 			} else {
@@ -152,7 +154,7 @@ static inline int __msqueue_add_node(struct ds_msqueue_elem __arena *new_node, s
 				cast_user(next);
 				next_elem = (void __arena *)__msqueue_list_entry(next, struct ds_msqueue_elem, node);
 				cast_user(tail);
-				(void)arena_atomic_cmpxchg(&queue->tail, tail, next_elem);
+				(void)arena_atomic_cmpxchg(&queue->tail, tail, next_elem, ARENA_RELEASE, ARENA_RELAXED);
 			}
 		}
 		retry_count++;
@@ -164,8 +166,8 @@ static inline int __msqueue_add_node(struct ds_msqueue_elem __arena *new_node, s
 
 	/* Successfully linked, now try to swing tail to new node */
 	cast_user(tail);
-	(void)arena_atomic_cmpxchg(&queue->tail, tail, new_node);
-	/* Update count */
+	(void)arena_atomic_cmpxchg(&queue->tail, tail, new_node, ARENA_RELEASE, ARENA_RELAXED);
+	/* Update count (relaxed: just statistics) */
 	arena_atomic_inc(&queue->count);
 	return DS_SUCCESS;
 }
@@ -242,10 +244,12 @@ static inline int ds_msqueue_delete(struct ds_msqueue __arena *queue, struct ds_
 	/* Dequeue loop */
 	while (retry_count < max_retries && can_loop) {
 		/* Read Head, Tail, and next */
-		head = queue->head;
-		tail = queue->tail;
+		
+		// head = arena_atomic_load(&queue->head, ARENA_ACQUIRE); // Doesn't work, BPF doesn't support
+		head = READ_ONCE(queue->head);
+		tail = READ_ONCE(queue->tail);
 		cast_kern(head);
-		next = head->node.next;
+		next = READ_ONCE(head->node.next);
 		
 		/* Check if Head is consistent */
 		cast_user(head);
@@ -261,7 +265,7 @@ static inline int ds_msqueue_delete(struct ds_msqueue __arena *queue, struct ds_
 				/* Tail is lagging, help advance it */
 				struct ds_msqueue_elem __arena *next_elem_tail;
 				next_elem_tail = (void __arena *)__msqueue_list_entry(next, struct ds_msqueue_elem, node);
-				(void)arena_atomic_cmpxchg(&queue->tail, tail, next_elem_tail);
+			(void)arena_atomic_cmpxchg(&queue->tail, tail, next_elem_tail, ARENA_RELEASE, ARENA_RELAXED);
 				retry_count++;
 				continue;
 			}
@@ -275,12 +279,12 @@ static inline int ds_msqueue_delete(struct ds_msqueue __arena *queue, struct ds_
 			data->value = next_elem->data.value;
 
 			cast_user(next_elem);
-			if (arena_atomic_cmpxchg(&queue->head, head, next_elem) == head) {
+			if (arena_atomic_cmpxchg(&queue->head, head, next_elem, ARENA_ACQ_REL, ARENA_RELAXED) == head) {
 				/* Successfully dequeued, free old dummy */
 				cast_user(head);
 				bpf_arena_free(head);
 				
-				/* Update count */
+				/* Update count (relaxed: just statistics) */
 				arena_atomic_dec(&queue->count);
 				
 				return DS_SUCCESS;

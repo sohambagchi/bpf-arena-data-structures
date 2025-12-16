@@ -42,6 +42,7 @@ enum ds_result {
 	DS_ERROR_NOMEM = -3,
 	DS_ERROR_INVALID = -4,
 	DS_ERROR_CORRUPT = -5,
+	DS_ERROR_BUSY = -6,
 };
 
 /* ========================================================================
