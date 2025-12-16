@@ -18,6 +18,122 @@
  * BPF KERNEL-SIDE IMPLEMENTATION
  * ======================================================================== */
 
+/* ========================================================================
+ * BPF ARENA ATOMICS (C11)
+ * ========================================================================
+ * Modern atomic primitives with explicit memory ordering for optimal
+ * performance and correctness in concurrent data structures.
+ * 
+ * NOTE: These must be defined BEFORE the allocator functions that use them.
+ * ======================================================================== */
+
+/* Memory ordering constants */
+#define ARENA_RELAXED __ATOMIC_RELAXED
+#define ARENA_ACQUIRE __ATOMIC_ACQUIRE
+#define ARENA_RELEASE __ATOMIC_RELEASE
+#define ARENA_ACQ_REL __ATOMIC_ACQ_REL
+#define ARENA_SEQ_CST __ATOMIC_SEQ_CST
+
+/**
+ * arena_atomic_cmpxchg - Compare and exchange (CAS) with memory ordering
+ * @ptr: Pointer to the location
+ * @old_val: Expected old value
+ * @new_val: New value to set
+ * @success_mo: Memory order on success
+ * @failure_mo: Memory order on failure
+ * 
+ * Returns: The value that was at *ptr before the operation (matches __sync behavior)
+ * 
+ * Usage:
+ * - Acquiring lock: ARENA_ACQUIRE / ARENA_RELAXED
+ * - General synchronization: ARENA_ACQ_REL / ARENA_ACQUIRE
+ * 
+ * Note: For pointer types, we cast to unsigned long to avoid address space issues.
+ */
+#define arena_atomic_cmpxchg(ptr, old_val, new_val, success_mo, failure_mo) \
+({ \
+	unsigned long __expected = (unsigned long)(old_val); \
+	__atomic_compare_exchange_n((unsigned long *)(ptr), &__expected, \
+				    (unsigned long)(new_val), 0, \
+				    (success_mo), (failure_mo)); \
+	(__typeof__(*(ptr)))__expected; \
+})
+
+/**
+ * arena_atomic_exchange - Atomically exchange (swap) value
+ * @ptr: Pointer to value
+ * @val: New value to set
+ * @mo: Memory order
+ * 
+ * Returns: The old value that was at *ptr
+ */
+#define arena_atomic_exchange(ptr, val, mo) \
+	__atomic_exchange_n((ptr), (val), (mo))
+
+/**
+ * arena_atomic_add - Atomically add (fetch-add)
+ * @ptr: Pointer to value
+ * @val: Value to add
+ * @mo: Memory order
+ * 
+ * Returns: The old value before addition
+ */
+#define arena_atomic_add(ptr, val, mo) \
+	__atomic_fetch_add((ptr), (val), (mo))
+
+/**
+ * arena_atomic_sub - Atomically subtract (fetch-sub)
+ * @ptr: Pointer to value
+ * @val: Value to subtract
+ * @mo: Memory order
+ * 
+ * Returns: The old value before subtraction
+ */
+#define arena_atomic_sub(ptr, val, mo) \
+	__atomic_fetch_sub((ptr), (val), (mo))
+
+/**
+ * arena_atomic_and - Atomically AND (fetch-and)
+ * @ptr: Pointer to value
+ * @val: Value to AND with
+ * @mo: Memory order
+ */
+#define arena_atomic_and(ptr, val, mo) \
+	__atomic_fetch_and((ptr), (val), (mo))
+
+/**
+ * arena_atomic_or - Atomically OR (fetch-or)
+ * @ptr: Pointer to value
+ * @val: Value to OR with
+ * @mo: Memory order
+ */
+#define arena_atomic_or(ptr, val, mo) \
+	__atomic_fetch_or((ptr), (val), (mo))
+
+/**
+ * arena_atomic_load - Atomically load value
+ * @ptr: Pointer to value
+ * @mo: Memory order
+ */
+#define arena_atomic_load(ptr, mo) __atomic_load_n((ptr), (mo))
+
+/**
+ * arena_atomic_store - Atomically store value
+ * @ptr: Pointer to value
+ * @val: Value to store
+ * @mo: Memory order
+ */
+#define arena_atomic_store(ptr, val, mo) __atomic_store_n((ptr), (val), (mo))
+
+/* Convenience wrappers for common patterns */
+#define arena_atomic_inc(ptr) arena_atomic_add((ptr), 1, ARENA_RELAXED)
+#define arena_atomic_dec(ptr) arena_atomic_sub((ptr), 1, ARENA_RELAXED)
+#define arena_memory_barrier() __atomic_thread_fence(ARENA_SEQ_CST)
+
+/* ========================================================================
+ * BPF ARENA MEMORY ALLOCATOR
+ * ======================================================================== */
+
 /* Simple bump allocator state - stored in arena space */
 static void __arena *__arena alloc_base;
 static __u64 __arena alloc_offset;
@@ -52,8 +168,8 @@ static inline void __arena* bpf_arena_alloc(unsigned int size)
 		alloc_offset = 0;
 	}
 
-	/* Atomically bump the offset */
-	offset = __sync_fetch_and_add(&alloc_offset, size);
+	/* Atomically bump the offset (relaxed: no synchronization needed) */
+	offset = arena_atomic_add(&alloc_offset, size, ARENA_RELAXED);
 	if (offset + size > 100 * PAGE_SIZE)
 		return NULL;
 
@@ -74,45 +190,6 @@ static inline void bpf_arena_free(void __arena *addr)
 	/* Bump allocator - no-op for now */
 	(void)addr;
 }
-
-/* ========================================================================
- * SYNCHRONIZATION PRIMITIVES FOR CONCURRENT DATA STRUCTURES
- * ======================================================================== */
-
-/**
- * arena_atomic_cmpxchg - Compare and exchange for arena pointers
- * @ptr: Pointer to the location
- * @old: Expected old value
- * @new: New value to set
- * 
- * Returns: The value that was at *ptr before the operation
- */
-#define arena_atomic_cmpxchg(ptr, old, new) \
-	__sync_val_compare_and_swap(ptr, old, new)
-
-/**
- * arena_atomic_inc - Atomically increment
- * @ptr: Pointer to value to increment
- */
-#define arena_atomic_inc(ptr) __sync_fetch_and_add(ptr, 1)
-
-/**
- * arena_atomic_dec - Atomically decrement
- * @ptr: Pointer to value to decrement
- */
-#define arena_atomic_dec(ptr) __sync_fetch_and_sub(ptr, 1)
-
-/**
- * arena_atomic_add - Atomically add
- * @ptr: Pointer to value
- * @val: Value to add
- */
-#define arena_atomic_add(ptr, val) __sync_fetch_and_add(ptr, val)
-
-/**
- * arena_memory_barrier - Full memory barrier
- */
-#define arena_memory_barrier() __sync_synchronize()
 
 #else /* !__BPF__ */
 
@@ -138,34 +215,50 @@ static inline void bpf_arena_free(void __arena *addr __attribute__((unused)))
 }
 
 /* ========================================================================
- * USERSPACE SYNCHRONIZATION PRIMITIVES
+ * USERSPACE SYNCHRONIZATION PRIMITIVES (C11)
+ * ========================================================================
+ * Userspace uses the same C11 atomic API for consistency.
  * ======================================================================== */
 
-/**
- * arena_atomic_cmpxchg - Compare and exchange for arena pointers
- */
-#define arena_atomic_cmpxchg(ptr, old, new) \
-	__sync_val_compare_and_swap(ptr, old, new)
+/* Memory ordering constants */
+#define ARENA_RELAXED __ATOMIC_RELAXED
+#define ARENA_ACQUIRE __ATOMIC_ACQUIRE
+#define ARENA_RELEASE __ATOMIC_RELEASE
+#define ARENA_ACQ_REL __ATOMIC_ACQ_REL
+#define ARENA_SEQ_CST __ATOMIC_SEQ_CST
 
-/**
- * arena_atomic_inc - Atomically increment
- */
-#define arena_atomic_inc(ptr) __sync_fetch_and_add(ptr, 1)
+/* Atomic operations - identical to BPF side */
+#define arena_atomic_cmpxchg(ptr, old_val, new_val, success_mo, failure_mo) \
+({ \
+	unsigned long __expected = (unsigned long)(old_val); \
+	__atomic_compare_exchange_n((unsigned long *)(ptr), &__expected, \
+				    (unsigned long)(new_val), 0, \
+				    (success_mo), (failure_mo)); \
+	(__typeof__(*(ptr)))__expected; \
+})
 
-/**
- * arena_atomic_dec - Atomically decrement
- */
-#define arena_atomic_dec(ptr) __sync_fetch_and_sub(ptr, 1)
+#define arena_atomic_exchange(ptr, val, mo) \
+	__atomic_exchange_n((ptr), (val), (mo))
 
-/**
- * arena_atomic_add - Atomically add
- */
-#define arena_atomic_add(ptr, val) __sync_fetch_and_add(ptr, val)
+#define arena_atomic_add(ptr, val, mo) \
+	__atomic_fetch_add((ptr), (val), (mo))
 
-/**
- * arena_memory_barrier - Full memory barrier
- */
-#define arena_memory_barrier() __sync_synchronize()
+#define arena_atomic_sub(ptr, val, mo) \
+	__atomic_fetch_sub((ptr), (val), (mo))
+
+#define arena_atomic_and(ptr, val, mo) \
+	__atomic_fetch_and((ptr), (val), (mo))
+
+#define arena_atomic_or(ptr, val, mo) \
+	__atomic_fetch_or((ptr), (val), (mo))
+
+#define arena_atomic_load(ptr, mo)       __atomic_load_n((ptr), (mo))
+#define arena_atomic_store(ptr, val, mo) __atomic_store_n((ptr), (val), (mo))
+
+/* Convenience wrappers */
+#define arena_atomic_inc(ptr) arena_atomic_add((ptr), 1, ARENA_RELAXED)
+#define arena_atomic_dec(ptr) arena_atomic_sub((ptr), 1, ARENA_RELAXED)
+#define arena_memory_barrier() __atomic_thread_fence(ARENA_SEQ_CST)
 
 #endif /* __BPF__ */
 

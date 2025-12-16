@@ -6,9 +6,35 @@
 #define WRITE_ONCE(x, val) ((*(volatile typeof(x) *) &(x)) = (val))
 #endif
 
+#ifndef READ_ONCE
+#define READ_ONCE(x) (*(volatile typeof(x) *)&(x))
+#endif
+
 #ifndef NUMA_NO_NODE
 #define	NUMA_NO_NODE	(-1)
 #endif
+
+#ifndef barrier
+#define barrier()		asm volatile("" ::: "memory")
+#endif
+
+#ifndef smp_store_release
+# define smp_store_release(p, v)		\
+do {						\
+	barrier();				\
+	WRITE_ONCE(*p, v);			\
+} while (0)
+#endif
+
+#ifndef smp_load_acquire
+# define smp_load_acquire(p)			\
+({						\
+	typeof(*p) ___p = READ_ONCE(*p);	\
+	barrier();				\
+	___p;					\
+})
+#endif
+
 
 #ifndef arena_container_of
 #define arena_container_of(ptr, type, member)			\
