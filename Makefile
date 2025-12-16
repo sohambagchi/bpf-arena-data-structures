@@ -87,7 +87,7 @@ ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
 # ============================================================================
 # List of all applications to build
 # Add your new programs here!
-APPS = skeleton skeleton_msqueue
+APPS = skeleton skeleton_msqueue skeleton_vyukhov
 
 # ============================================================================
 # CLANG BPF SYSTEM INCLUDES
