@@ -140,12 +140,20 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 {
 	int result;
 	ds_head = &global_ds_head;
+
+	if (!initialized) {
+		result = ds_list_init(ds_head);
+		if (result != DS_SUCCESS) {
+			total_kernel_failures++;
+			return 0;
+		}
+		initialized = true;
+	}
 	
 	__u64 pid;
 	__u64 ts;
 
 	pid = bpf_get_current_pid_tgid() >> 32;
-
 	ts = bpf_ktime_get_ns();
 	result = ds_list_insert(ds_head, pid, ts);
 	

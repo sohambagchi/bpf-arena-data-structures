@@ -52,7 +52,7 @@ int config_queue_capacity = 128;  /* Must be power of 2 - start small for testin
 
 /* DS_API_INSERT: Declare your data structure head here */
 struct ds_vyukhov_head __arena *ds_head;
-struct ds_vyukhov_head __arena_global global_ds_head;
+struct ds_vyukhov_head __arena global_ds_head;
 
 /* Statistics and control */
 __u64 total_kernel_ops = 0;
@@ -96,7 +96,7 @@ static __always_inline int handle_operation(struct ds_operation *op)
 		
 	case DS_OP_DELETE:
 		/* DS_API_INSERT: Call your delete function */
-		result = ds_vyukhov_delete(ds_head, op->kv.key);
+		result = ds_vyukhov_delete(ds_head, &op->kv);
 		break;
 		
 	case DS_OP_SEARCH:

@@ -38,14 +38,12 @@
  * ======================================================================== */
 
 struct test_config {
-	int sleep_seconds;
 	bool verify;
 	bool print_stats;
 };
 
 /* Default configuration */
 static struct test_config config = {
-	.sleep_seconds = 5,
 	.verify = false,
 	.print_stats = true,
 };
@@ -56,52 +54,50 @@ static struct test_config config = {
 
 static struct skeleton_bpf *skel = NULL;
 static volatile bool stop_test = false;
+static __u64 dequeued_count = 0;
 
 /* ========================================================================
- * READER THREAD
+ * POLLING AND DEQUEUE
  * ======================================================================== */
 
-/* Iteration callback */
-static __u64 print_count = 0;
-
-static int print_element_callback(__u64 key, __u64 value, void *ctx __attribute__((unused)))
-{
-	printf("  Element %llu: pid=%llu, last_ts=%llu\n", print_count, key, value);
-	print_count++;
-	
-	/* Stop after 10 elements */
-	if (print_count >= 10)
-		return 1;
-	
-	return 0;
-}
-
 /**
- * read_data_structure - Sleep then read the data structure
+ * poll_and_dequeue - Continuously poll and dequeue elements
  */
-static void read_data_structure()
+static void poll_and_dequeue()
 {
-	printf("Sleeping for %d seconds to allow kernel to populate data structure...\n", config.sleep_seconds);
-	sleep(config.sleep_seconds);
-	
 	struct ds_list_head *head = skel->bss->ds_head;
-
+	struct ds_kv data;
+	int result;
+	
 	if (!head) {
-		printf("Data structure not yet initialized\n");
-		return;
+		printf("List not initialized, waiting for LSM hook trigger...\n");
+		/* Keep polling until initialized */
+		while (!head && !stop_test) {
+			head = skel->bss->ds_head;
+		}
+		if (stop_test)
+			return;
 	}
 	
-	printf("Reading data structure...\n");
+	printf("Starting continuous polling (Ctrl+C to stop)...\n\n");
 	
-	/* Use ds_list_iterate API */
-	print_count = 0;
-	__u64 visited = ds_list_iterate(head, print_element_callback, NULL);
-	
-	if (visited >= 10) {
-		printf("  ... (showing first 10 elements)\n");
+	while (!stop_test) {
+		result = ds_list_pop(head, &data);
+		
+		if (result == DS_SUCCESS) {
+			printf("Dequeued element %llu: pid=%llu, ts=%llu\n", 
+			       dequeued_count, data.key, data.value);
+			dequeued_count++;
+		} else if (result == DS_ERROR_NOT_FOUND) {
+			/* List empty, keep polling (busy-wait) */
+			continue;
+		} else {
+			/* Some other error */
+			printf("Dequeue error: %d\n", result);
+		}
 	}
 	
-	printf("Total elements in list: %llu\n", head->count);
+	printf("\nStopped polling. Total dequeued: %llu\n", dequeued_count);
 }
 
 /* ========================================================================
@@ -142,6 +138,10 @@ static void print_statistics(void)
 	printf("  Total inserts:    %llu\n", skel->bss->total_kernel_ops);
 	printf("  Insert failures:  %llu\n", skel->bss->total_kernel_failures);
 	
+	/* Userspace statistics */
+	printf("\nUserspace Operations:\n");
+	printf("  Elements dequeued: %llu\n", dequeued_count);
+	
 	/* Data structure statistics */
 	printf("\nData Structure State:\n");
 	struct ds_list_head *head = skel->bss->ds_head;
@@ -173,32 +173,25 @@ static void print_usage(const char *prog)
 	printf("Usage: %s [OPTIONS]\n\n", prog);
 	printf("Test concurrent data structures with BPF arena\n\n");
 	printf("DESIGN:\n");
-	printf("  Kernel:    LSM hook on inode_create inserts items (triggers on execve)\n");
-	printf("  Userspace: Single thread sleeps, then reads the data structure\n\n");
+	printf("  Kernel:    LSM hook on inode_create inserts items (triggers on file creation)\n");
+	printf("  Userspace: Continuously polls and dequeues elements as they arrive\n\n");
 	printf("OPTIONS:\n");
-	printf("  -d N    Sleep duration in seconds before reading (default: 5)\n");
-	printf("  -v      Verify data structure integrity\n");
-	printf("  -s      Print statistics (default: enabled)\n");
+	printf("  -v      Verify data structure integrity on exit\n");
+	printf("  -s      Print statistics on exit (default: enabled)\n");
 	printf("  -h      Show this help\n");
-	printf("\nKernel inserts trigger automatically on program execution (execve)\n");
+	printf("\nKernel inserts trigger automatically on file creation (inode_create)\n");
+	printf("Userspace continuously dequeues and prints elements (Ctrl+C to stop)\n");
 	printf("\nExamples:\n");
-	printf("  %s -d 10     # Sleep 10 seconds before reading\n", prog);
-	printf("  %s -d 5 -v   # Sleep 5 seconds then verify\n", prog);
+	printf("  %s          # Run with default options\n", prog);
+	printf("  %s -v       # Run and verify on exit\n", prog);
 }
 
 static int parse_args(int argc, char **argv)
 {
 	int opt;
 	
-	while ((opt = getopt(argc, argv, "d:vsh")) != -1) {
+	while ((opt = getopt(argc, argv, "vsh")) != -1) {
 		switch (opt) {
-		case 'd':
-			config.sleep_seconds = atoi(optarg);
-			if (config.sleep_seconds < 0) {
-				fprintf(stderr, "Invalid sleep duration: %s\n", optarg);
-				return -1;
-			}
-			break;
 		case 'v':
 			config.verify = true;
 			break;
@@ -248,17 +241,17 @@ int main(int argc, char **argv)
 	printf("Data structure will be lazily initialized on first LSM hook trigger\n");
 	printf("Kernel inserts triggered automatically on file creation (inode_create)\n\n");
 	
-	/* Read the data structure after sleeping */
-	read_data_structure();
-	
-	/* Print statistics */
-	if (config.print_stats) {
-		print_statistics();
-	}
+	/* Start continuous polling and dequeuing */
+	poll_and_dequeue();
 	
 	/* Verify data structure if requested */
 	if (config.verify) {
 		verify_data_structure();
+	}
+	
+	/* Print statistics */
+	if (config.print_stats) {
+		print_statistics();
 	}
 	
 	printf("\nDone!\n");
