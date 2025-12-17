@@ -77,7 +77,7 @@ INCLUDES := -I$(OUTPUT) -I./third_party/libbpf/include/uapi -I$(dir $(VMLINUX)) 
 # COMPILER FLAGS
 # ============================================================================
 # Userspace C flags
-CFLAGS := -g -Wall -Wextra -O2
+CFLAGS := -g -Wall -Wextra -O0
 
 # Linker flags
 ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
