@@ -42,8 +42,7 @@ typedef struct ds_list_head __arena ds_list_head_t;
 
 struct ds_list_elem {
 	struct ds_list_node node;
-	__u64 key; // pid
-	__u64 value; // timestamp
+	struct ds_kv data;
 };
 
 /* ========================================================================
@@ -204,16 +203,16 @@ static inline int ds_list_insert(struct ds_list_head __arena *head, __u64 key, _
 	if (!head)
 		ds_list_init(head);
 	
-	/* Check if key already exists */
-	list_for_each_entry(n, head, node) {
-		cast_kern(n);
-		if (n->key == key) {
-			/* Key exists - update value */
-			n->value = value;
+	// /* Check if key already exists */
+	// list_for_each_entry(n, head, node) {
+	// 	cast_kern(n);
+	// 	if (n->data.key == key) {
+	// 		/* Key exists - update value */
+	// 		n->data.value = value;
 
-			return DS_SUCCESS;
-		}
-	}
+	// 		return DS_SUCCESS;
+	// 	}
+	// }
 	
 	/* Allocate new node - returns __arena pointer */
 	struct ds_list_elem __arena *new_node = bpf_arena_alloc(sizeof(*new_node));
@@ -221,8 +220,8 @@ static inline int ds_list_insert(struct ds_list_head __arena *head, __u64 key, _
 		return DS_ERROR_NOMEM;
 
 	/* Initialize node - NO cast_kern needed with clang-20 */
-	new_node->key = key;
-	new_node->value = value;
+	new_node->data.key = key;
+	new_node->data.value = value;
 
 	/* Add to tail of list for FIFO behavior */
 	__list_add_tail(new_node, head);
@@ -248,7 +247,7 @@ static inline int ds_list_delete(struct ds_list_head __arena *head, __u64 key)
 	/* Search for key */
 	list_for_each_entry(n, head, node) {
 		cast_kern(n);
-		if (n->key == key) {
+		if (n->data.key == key) {
 			/* Found it - delete */
 			__list_del(&n->node);
 			bpf_arena_free(n);
@@ -287,8 +286,8 @@ static inline int ds_list_pop(struct ds_list_head __arena *head, struct ds_kv *d
 	
 	/* Copy data out */
 	cast_kern(first);
-	data->key = first->key;
-	data->value = first->value;
+	data->key = first->data.key;
+	data->value = first->data.value;
 	
 	/* Remove from list */
 	__list_del(&first->node);
@@ -319,7 +318,7 @@ static inline int ds_list_search(struct ds_list_head __arena *head, __u64 key)
 	/* Search for key */
 	list_for_each_entry(n, head, node) {
 		cast_kern(n);
-		if (n->key == key) {
+		if (n->data.key == key) {
 			return DS_SUCCESS;
 		}
 	}
@@ -418,7 +417,7 @@ static inline __u64 ds_list_iterate(struct ds_list_head __arena *head,
 	list_for_each_entry(elem, head, node) {
 		cast_kern(elem);
 		
-		int ret = fn(elem->key, elem->value, ctx);
+		int ret = fn(elem->data.key, elem->data.value, ctx);
 		if (ret != 0)
 			break;
 		

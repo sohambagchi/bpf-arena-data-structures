@@ -37,8 +37,7 @@
  */
 struct ds_vyukhov_node {
 	__u64 sequence;
-	__u64 key;
-	__u64 value;
+	struct ds_kv data;
 };
 
 /**
@@ -124,7 +123,7 @@ static inline int ds_vyukhov_init(struct ds_vyukhov_head __arena *head, __u32 ca
 	cast_kern(head->buffer);
 	
 	/* Initialize sequence counters - cell i gets sequence i 
-	 * Note: key and value are already zeroed by arena allocation */
+	 * Note: data fields are already zeroed by arena allocation */
 	for (__u32 i = 0; i < capacity && can_loop; i++) {
 		struct ds_vyukhov_node __arena *cell = &head->buffer[i];
 		cast_kern(cell);
@@ -177,8 +176,8 @@ static inline int ds_vyukhov_insert(struct ds_vyukhov_head __arena *head,
 			
 			if (old_pos == pos) {
 				/* Success! We own this slot. Write data. */
-				cell->key = key;
-				cell->value = value;
+				cell->data.key = key;
+				cell->data.value = value;
 				
 				/* Release to consumer: sequence = pos + 1 */
 				arena_atomic_exchange(&cell->sequence, pos + 1, ARENA_RELEASE);
@@ -247,8 +246,8 @@ static inline int ds_vyukhov_delete(struct ds_vyukhov_head __arena *head, struct
 			if (old_pos == pos) {
 				/* Success! We own this data. Read and return it. */
 				cast_kern(cell);
-				data->key = cell->key;
-				data->value = cell->value;
+				data->key = cell->data.key;
+				data->value = cell->data.value;
 				
 				/* Release to producer: sequence = pos + mask + 1 (next lap) */
 				arena_atomic_exchange(&cell->sequence, pos + mask + 1, ARENA_RELEASE);
@@ -317,7 +316,7 @@ static inline int ds_vyukhov_search(struct ds_vyukhov_head __arena *head, __u64 
 		struct ds_vyukhov_node __arena *cell = &head->buffer[i & mask];
 		cast_kern(cell);
 		
-		if (cell->key == key)
+		if (cell->data.key == key)
 			return DS_SUCCESS;
 	}
 	
@@ -421,7 +420,7 @@ static inline __u64 ds_vyukhov_iterate(struct ds_vyukhov_head __arena *head,
 		struct ds_vyukhov_node __arena *cell = &head->buffer[i & mask];
 		cast_kern(cell);
 		
-		int ret = fn(cell->key, cell->value, ctx);
+		int ret = fn(cell->data.key, cell->data.value, ctx);
 		if (ret != 0)
 			break;
 		
