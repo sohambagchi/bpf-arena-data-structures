@@ -134,61 +134,55 @@
  * BPF ARENA MEMORY ALLOCATOR
  * ======================================================================== */
 
-/* Simple bump allocator state - stored in arena space */
-static void __arena *__arena alloc_base;
-static __u64 __arena alloc_offset;
+#define NR_CPUS (sizeof(struct cpumask) * 8)
 
-/**
- * bpf_arena_alloc - Allocate memory from BPF arena
- * @size: Size in bytes to allocate
- * 
- * Returns: Arena pointer (__arena) to allocated memory, or NULL on failure
- * 
- * IMPORTANT CAST BEHAVIOR with clang-20:
- * - __arena means address_space(1) attribute
- * - cast_kern() and cast_user() are COMPILE-TIME NOPs
- * - LLVM automatically inserts address space casts in generated BPF bytecode
- * - Return type void __arena* tells LLVM this is an arena pointer
- * - DO NOT manually call cast_kern/cast_user on modern arena pointers
- */
+static void __arena * __arena page_frag_cur_page[NR_CPUS];
+static int __arena page_frag_cur_offset[NR_CPUS];
+
+/* Simple page_frag allocator */
 static inline void __arena* bpf_arena_alloc(unsigned int size)
 {
-	__u64 offset;
+	__u64 __arena *obj_cnt;
+	__u32 cpu = bpf_get_smp_processor_id();
+	void __arena *page = page_frag_cur_page[cpu];
+	int __arena *cur_offset = &page_frag_cur_offset[cpu];
+	int offset;
 
 	size = round_up(size, 8);
-	if (size >= PAGE_SIZE)
+	if (size >= PAGE_SIZE - 8)
 		return NULL;
-
-	/* First allocation - get pages from arena */
-	if (!alloc_base) {
-		/* Allocate 100 pages (400KB) - returns arena pointer */
-		alloc_base = bpf_arena_alloc_pages(&arena, NULL, 100, NUMA_NO_NODE, 0);
-		if (!alloc_base)
+	if (!page) {
+refill:
+		page = bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
+		if (!page)
 			return NULL;
-		alloc_offset = 0;
+		cast_kern(page);
+		page_frag_cur_page[cpu] = page;
+		*cur_offset = PAGE_SIZE - 8;
+		obj_cnt = page + PAGE_SIZE - 8;
+		*obj_cnt = 0;
+	} else {
+		cast_kern(page);
+		obj_cnt = page + PAGE_SIZE - 8;
 	}
 
-	/* Atomically bump the offset (relaxed: no synchronization needed) */
-	offset = arena_atomic_add(&alloc_offset, size, ARENA_RELAXED);
-	if (offset + size > 100 * PAGE_SIZE)
-		return NULL;
+	offset = *cur_offset - size;
+	if (offset < 0)
+		goto refill;
 
-	/* Return arena pointer - LLVM preserves address space through arithmetic */
-	cast_kern(alloc_base);
-	return alloc_base + offset;
+	(*obj_cnt)++;
+	*cur_offset = offset;
+	return page + offset;
 }
 
-/**
- * bpf_arena_free - Free memory allocated from BPF arena
- * @addr: Arena pointer to free
- * 
- * Note: Current bump allocator doesn't actually free - memory is reused
- * when the program restarts. This is a placeholder for future implementations.
- */
 static inline void bpf_arena_free(void __arena *addr)
 {
-	/* Bump allocator - no-op for now */
-	(void)addr;
+	__u64 __arena *obj_cnt;
+
+	addr = (void __arena *)(((long)addr) & ~(PAGE_SIZE - 1));
+	obj_cnt = addr + PAGE_SIZE - 8;
+	if (--(*obj_cnt) == 0)
+		bpf_arena_free_pages(&arena, addr, 1);
 }
 
 #else /* !__BPF__ */

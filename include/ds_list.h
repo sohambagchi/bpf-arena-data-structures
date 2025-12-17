@@ -127,6 +127,41 @@ static inline void __list_del(ds_list_node_t *n)
 	}
 }
 
+/**
+ * __list_add_tail - Add element to tail of list (internal)
+ */
+static inline void __list_add_tail(struct ds_list_elem __arena *elem,
+                                   struct ds_list_head __arena *h)
+{
+	struct ds_list_elem __arena *curr;
+	struct ds_list_elem __arena *last = NULL;
+	ds_list_node_t *n = &elem->node;
+	
+	/* Find the last element */
+	list_for_each_entry(curr, h, node) {
+		last = curr;
+	}
+	
+	if (!last) {
+		/* Empty list - add as first element */
+		__list_add_head(elem, h);
+	} else {
+		/* Add after last element */
+		cast_kern(last);
+		cast_kern(n);
+		
+		/* Set new element's pointers */
+		WRITE_ONCE(n->next, NULL);
+		struct ds_list_node __arena * __arena *tmp = &last->node.next;
+		cast_user(tmp);
+		WRITE_ONCE(n->pprev, tmp);
+		
+		/* Update last element to point to new element */
+		cast_user(elem);
+		WRITE_ONCE(last->node.next, &elem->node);
+	}
+}
+
 /* ========================================================================
  * API IMPLEMENTATION
  * ======================================================================== */
@@ -143,9 +178,11 @@ static inline int ds_list_init(struct ds_list_head __arena *head)
 	if (!head)
 		return DS_ERROR_INVALID;
 	
-	// cast_kern(head);
+	/* Note: Global __arena variables are zero-initialized by the kernel,
+	 * so count is already 0. We only explicitly set first = NULL due to
+	 * BPF verifier limitations that prevent writing to multiple fields.
+	 */
 	head->first = NULL;
-	head->count = 0;
 	
 	return DS_SUCCESS;
 }
@@ -187,8 +224,8 @@ static inline int ds_list_insert(struct ds_list_head __arena *head, __u64 key, _
 	new_node->key = key;
 	new_node->value = value;
 
-	/* Add to head of list */
-	__list_add_head(new_node, head);
+	/* Add to tail of list for FIFO behavior */
+	__list_add_tail(new_node, head);
 	head->count++;
 	
 	return DS_SUCCESS;
@@ -221,6 +258,47 @@ static inline int ds_list_delete(struct ds_list_head __arena *head, __u64 key)
 	}
 	
 	return DS_ERROR_NOT_FOUND;
+}
+
+/**
+ * ds_list_pop - Pop the first element from the list (FIFO dequeue)
+ * @head: List head
+ * @data: Output parameter for popped key-value pair
+ * 
+ * Removes and returns the first element from the list.
+ * Used with tail insertion for FIFO queue behavior.
+ * 
+ * Returns: DS_SUCCESS if element popped,
+ *          DS_ERROR_INVALID if head or data is NULL,
+ *          DS_ERROR_NOT_FOUND if list is empty
+ */
+static inline int ds_list_pop(struct ds_list_head __arena *head, struct ds_kv *data)
+{
+	struct ds_list_elem __arena *first;
+	
+	if (!head || !data)
+		return DS_ERROR_INVALID;
+	
+	cast_kern(head);
+	first = head->first;
+	
+	if (!first)
+		return DS_ERROR_NOT_FOUND;
+	
+	/* Copy data out */
+	cast_kern(first);
+	data->key = first->key;
+	data->value = first->value;
+	
+	/* Remove from list */
+	__list_del(&first->node);
+	head->count--;
+	
+	/* Free the node */
+	cast_user(first);
+	bpf_arena_free(first);
+	
+	return DS_SUCCESS;
 }
 
 /**

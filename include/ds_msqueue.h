@@ -102,6 +102,8 @@ static inline int ds_msqueue_init(struct ds_msqueue __arena *queue)
 	cast_kern(dummy);
 	/* Initialize dummy element - NO cast_kern needed with clang-20 */
 	dummy->node.next = NULL;
+	dummy->data.key = 42;
+	dummy->data.value = 42;
 	
 	/* Both head and tail point to dummy initially */
 	cast_user(dummy);
@@ -138,23 +140,28 @@ static inline int __msqueue_add_node(struct ds_msqueue_elem __arena *new_node, s
 		// tail = arena_atomic_load(&queue->tail, ARENA_ACQUIRE); // Doesn't work, BPF doesn't support
 		tail = READ_ONCE(queue->tail);
 		cast_kern(tail);
-		next = READ_ONCE(tail->node.next);
+		next = tail->node.next;
 		
 		/* Check if tail is consistent */
 		cast_user(tail);
 		if (tail == queue->tail) {
 			cast_user(next);
 			if (next == NULL) {
+				cast_kern(tail);
+				cast_kern(new_node);
 				if (arena_atomic_cmpxchg(&tail->node.next, next, &new_node->node, ARENA_ACQ_REL, ARENA_RELAXED) == next) {
 					break;
 				}
+				cast_user(tail);
+				cast_kern(new_node);
 			} else {
 				/* Tail is lagging, help advance it */
 				struct ds_msqueue_elem __arena *next_elem;
-				cast_user(next);
+				// cast_user(next);
 				next_elem = (void __arena *)__msqueue_list_entry(next, struct ds_msqueue_elem, node);
-				cast_user(tail);
+				// cast_user(tail);
 				(void)arena_atomic_cmpxchg(&queue->tail, tail, next_elem, ARENA_RELEASE, ARENA_RELAXED);
+				// (void)arena_atomic_cmpxchg(&queue->tail, tail, (struct ds_msqueue_elem *) 69420, ARENA_RELEASE, ARENA_RELAXED);
 			}
 		}
 		retry_count++;
@@ -165,7 +172,8 @@ static inline int __msqueue_add_node(struct ds_msqueue_elem __arena *new_node, s
 	}
 
 	/* Successfully linked, now try to swing tail to new node */
-	cast_user(tail);
+	// cast_user(tail);
+	// (void)arena_atomic_cmpxchg(&queue->tail, tail, (struct ds_msqueue_elem *) 21664, ARENA_RELEASE, ARENA_RELAXED);
 	(void)arena_atomic_cmpxchg(&queue->tail, tail, new_node, ARENA_RELEASE, ARENA_RELAXED);
 	/* Update count (relaxed: just statistics) */
 	arena_atomic_inc(&queue->count);
@@ -200,11 +208,12 @@ static inline int ds_msqueue_insert(struct ds_msqueue __arena *queue, __u64 key,
 	if (!new_node)
 		return DS_ERROR_NOMEM;
 	
-	/* Initialize element - NO cast_kern needed with clang-20 */
+	/* Initialize element */
 	new_node->data.key = key;
 	new_node->data.value = value;
 	new_node->node.next = NULL;
 	
+	cast_user(new_node);
 	if (__msqueue_add_node(new_node, queue) == DS_SUCCESS) {
 		return DS_SUCCESS;
 	} else {
@@ -230,17 +239,19 @@ static inline int ds_msqueue_insert(struct ds_msqueue __arena *queue, __u64 key,
  *          DS_ERROR_INVALID if queue is NULL or operation fails after max retries,
  *          DS_ERROR_NOT_FOUND if queue is empty (head->next is NULL)
  */
-static inline int ds_msqueue_delete(struct ds_msqueue __arena *queue, struct ds_kv * data __attribute__((unused)))
+static inline int ds_msqueue_delete(struct ds_msqueue __arena *queue, struct ds_kv *data)
 {
 	struct ds_msqueue_elem __arena *head;
 	struct ds_msqueue_elem __arena *tail;
 	ds_msqueue_node_t *next;
+	// ds_msqueue_node_t *next_tail;
 	int max_retries = 10;
 	int retry_count = 0;
 	
-	if (!queue)
+	if (!queue || !data) {
 		return DS_ERROR_INVALID;
-	
+	}
+
 	/* Dequeue loop */
 	while (retry_count < max_retries && can_loop) {
 		/* Read Head, Tail, and next */
@@ -296,6 +307,33 @@ static inline int ds_msqueue_delete(struct ds_msqueue __arena *queue, struct ds_
 	
 	/* Failed after max retries */
 	return DS_ERROR_INVALID;
+}
+
+/**
+ * ds_msqueue_pop - Pop an element from the queue (wrapper for delete)
+ * @queue: Pointer to queue structure
+ * @data: Output parameter for dequeued key-value pair
+ * 
+ * This is a convenience wrapper around ds_msqueue_delete() that provides
+ * more intuitive naming for FIFO pop operations. Unlike ds_msqueue_delete,
+ * this function treats an empty queue (DS_ERROR_NOT_FOUND) as a normal
+ * condition and returns 0, making it suitable for polling scenarios where
+ * the queue may frequently be empty.
+ * 
+ * Returns: 1 if element successfully dequeued (data is valid),
+ *          0 if queue is empty (data is unchanged),
+ *          negative error code for actual errors (invalid parameters, etc.)
+ */
+static inline int ds_msqueue_pop(struct ds_msqueue __arena *queue, struct ds_kv *data)
+{
+	int result = ds_msqueue_delete(queue, data);
+	
+	if (result == DS_SUCCESS)
+		return 1; /* Successfully dequeued */
+	else if (result == DS_ERROR_NOT_FOUND)
+		return 0; /* Empty queue - not an error */
+	else
+		return result; /* Actual error */
 }
 
 /**
@@ -396,11 +434,11 @@ static inline int ds_msqueue_verify(struct ds_msqueue __arena *queue)
 		if (node_ptr) {
 			node = (void __arena *)__msqueue_list_entry(node_ptr, struct ds_msqueue_elem, node);
 		} else {
-			node = NULL;
+			node = 0;
 		}
 		
 		/* Count non-dummy nodes (skip first node which is dummy) */
-		if (count > 0 || node != NULL)
+		if (count > 0 || node != 0)
 			count++;
 	}
 	
@@ -500,7 +538,7 @@ static inline __u64 ds_msqueue_iterate(struct ds_msqueue __arena *queue,
 			cast_user(next);
 			node = (void __arena *)__msqueue_list_entry(next, struct ds_msqueue_elem, node);
 		} else {
-			node = NULL;
+			node = 0;
 		}
 	}
 	

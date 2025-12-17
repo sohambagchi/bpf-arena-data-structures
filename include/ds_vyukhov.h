@@ -207,27 +207,25 @@ static inline int ds_vyukhov_insert(struct ds_vyukhov_head __arena *head,
 /**
  * ds_vyukhov_delete - Dequeue an element (delete/pop)
  * @head: Queue head
- * @key: Ignored (queue is FIFO, not key-based)
+ * @data: Output parameter for dequeued key-value pair
  * 
  * Consumers compete to claim data via CAS on dequeue_pos.
  * Data is available when cell->sequence == pos + 1.
  * After reading, sets sequence to pos + mask + 1 for next lap.
  * 
  * Returns: DS_SUCCESS on success
+ *          DS_ERROR_INVALID if head or data is NULL
  *          DS_ERROR_NOT_FOUND if queue is empty
  *          DS_ERROR_BUSY if max retries exceeded
  */
-static inline int ds_vyukhov_delete(struct ds_vyukhov_head __arena *head, __u64 key)
+static inline int ds_vyukhov_delete(struct ds_vyukhov_head __arena *head, struct ds_kv *data)
 {
 	struct ds_vyukhov_node __arena *cell;
 	__u64 pos;
 	__u64 mask;
 	int retries = 0;
 	
-	/* Queue delete doesn't use key parameter */
-	(void)key;
-	
-	if (!head || !head->buffer)
+	if (!head || !head->buffer || !data)
 		return DS_ERROR_INVALID;
 	
 	pos = READ_ONCE(head->dequeue_pos);
@@ -247,9 +245,10 @@ static inline int ds_vyukhov_delete(struct ds_vyukhov_head __arena *head, __u64 
 			                                     ARENA_ACQUIRE, ARENA_RELAXED);
 			
 			if (old_pos == pos) {
-				/* Success! We own this data. */
-				__u64 val = cell->value;  /* Read the data */
-				(void)val;  /* May be used for validation */
+				/* Success! We own this data. Read and return it. */
+				cast_kern(cell);
+				data->key = cell->key;
+				data->value = cell->value;
 				
 				/* Release to producer: sequence = pos + mask + 1 (next lap) */
 				arena_atomic_exchange(&cell->sequence, pos + mask + 1, ARENA_RELEASE);
@@ -273,6 +272,21 @@ static inline int ds_vyukhov_delete(struct ds_vyukhov_head __arena *head, __u64 
 	
 	/* Max retries exceeded */
 	return DS_ERROR_BUSY;
+}
+
+/**
+ * ds_vyukhov_pop - Pop an element from the queue (wrapper for delete)
+ * @head: Queue head
+ * @data: Output parameter for dequeued key-value pair
+ * 
+ * This is a convenience wrapper around ds_vyukhov_delete() that provides
+ * more intuitive naming for FIFO pop operations.
+ * 
+ * Returns: DS_SUCCESS on success, error code otherwise
+ */
+static inline int ds_vyukhov_pop(struct ds_vyukhov_head __arena *head, struct ds_kv *data)
+{
+	return ds_vyukhov_delete(head, data);
 }
 
 /**
