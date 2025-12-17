@@ -101,9 +101,9 @@ static inline int ds_msqueue_init(struct ds_msqueue __arena *queue)
 	
 	cast_kern(dummy);
 	/* Initialize dummy element - NO cast_kern needed with clang-20 */
-	dummy->node.next = NULL;
-	dummy->data.key = 42;
-	dummy->data.value = 42;
+	WRITE_ONCE(dummy->node.next, NULL);
+	WRITE_ONCE(dummy->data.key, 0);
+	WRITE_ONCE(dummy->data.value, 0);
 	
 	/* Both head and tail point to dummy initially */
 	cast_user(dummy);
@@ -138,7 +138,8 @@ static inline int __msqueue_add_node(struct ds_msqueue_elem __arena *new_node, s
 		/* Read tail */
 
 		// tail = arena_atomic_load(&queue->tail, ARENA_ACQUIRE); // Doesn't work, BPF doesn't support
-		tail = READ_ONCE(queue->tail);
+		// tail = READ_ONCE(queue->tail);
+		tail = smp_load_acquire(&queue->tail);
 		cast_kern(tail);
 		next = tail->node.next;
 		
@@ -257,7 +258,8 @@ static inline int ds_msqueue_delete(struct ds_msqueue __arena *queue, struct ds_
 		/* Read Head, Tail, and next */
 		
 		// head = arena_atomic_load(&queue->head, ARENA_ACQUIRE); // Doesn't work, BPF doesn't support
-		head = READ_ONCE(queue->head);
+		// head = READ_ONCE(queue->head);
+		head = smp_load_acquire(&queue->head);
 		tail = READ_ONCE(queue->tail);
 		cast_kern(head);
 		next = READ_ONCE(head->node.next);

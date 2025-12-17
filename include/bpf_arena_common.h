@@ -26,12 +26,22 @@ do {						\
 } while (0)
 #endif
 
+/*
 #ifndef smp_load_acquire
 # define smp_load_acquire(p)			\
 ({						\
 	typeof(*p) ___p = READ_ONCE(*p);	\
 	barrier();				\
 	___p;					\
+})
+#endif
+*/
+#ifndef smp_load_acquire
+# define smp_load_acquire(p)			\
+({						\
+	uintptr_t __p = (uintptr_t)READ_ONCE(*p);	\
+	barrier();				\
+	(typeof(*p))__p;					\
 })
 #endif
 

@@ -111,9 +111,12 @@ static inline int ds_vyukhov_init(struct ds_vyukhov_head __arena *head, __u32 ca
 	
 	/* Initialize control fields */
 	head->buffer_mask = capacity - 1;
-	head->enqueue_pos = 0;
-	head->dequeue_pos = 0;
-	head->count = 0;
+	WRITE_ONCE(head->enqueue_pos, 0);
+	WRITE_ONCE(head->dequeue_pos, 0);
+	WRITE_ONCE(head->count, 0);
+	// head->enqueue_pos = 0;
+	// head->dequeue_pos = 0;
+	// head->count = 0;
 	
 	/* Allocate the ring buffer */
 	head->buffer = bpf_arena_alloc(capacity * sizeof(struct ds_vyukhov_node));
@@ -166,13 +169,13 @@ static inline int ds_vyukhov_insert(struct ds_vyukhov_head __arena *head,
 		cell = &head->buffer[pos & mask];
 		cast_kern(cell);
 		
-		__u64 seq = READ_ONCE(cell->sequence);
+		__u64 seq = smp_load_acquire(&cell->sequence);
 		__s64 dif = (__s64)seq - (__s64)pos;
 		
 		if (dif == 0) {
 			/* Cell is ready for write. Try to claim it. */
 			__u64 old_pos = arena_atomic_cmpxchg(&head->enqueue_pos, pos, pos + 1,
-			                                     ARENA_ACQUIRE, ARENA_RELAXED);
+			                                     ARENA_RELAXED, ARENA_RELAXED);
 			
 			if (old_pos == pos) {
 				/* Success! We own this slot. Write data. */
@@ -180,7 +183,8 @@ static inline int ds_vyukhov_insert(struct ds_vyukhov_head __arena *head,
 				cell->data.value = value;
 				
 				/* Release to consumer: sequence = pos + 1 */
-				arena_atomic_exchange(&cell->sequence, pos + 1, ARENA_RELEASE);
+				// arena_atomic_exchange(&cell->sequence, pos + 1, ARENA_RELEASE);
+				smp_store_release(&cell->sequence, pos + 1);
 				
 				/* Update approximate count (relaxed: just statistics) */
 				arena_atomic_inc(&head->count);
@@ -235,13 +239,14 @@ static inline int ds_vyukhov_delete(struct ds_vyukhov_head __arena *head, struct
 		cell = &head->buffer[pos & mask];
 		cast_kern(cell);
 		
-		__u64 seq = READ_ONCE(cell->sequence);
+		// __u64 seq = READ_ONCE(cell->sequence); // TODO: Should be an acquire? 
+		__u64 seq = smp_load_acquire(&cell->sequence);
 		__s64 dif = (__s64)seq - (__s64)(pos + 1);
 		
 		if (dif == 0) {
 			/* Cell has data. Try to claim it. */
 			__u64 old_pos = arena_atomic_cmpxchg(&head->dequeue_pos, pos, pos + 1,
-			                                     ARENA_ACQUIRE, ARENA_RELAXED);
+			                                     ARENA_RELAXED, ARENA_RELAXED);
 			
 			if (old_pos == pos) {
 				/* Success! We own this data. Read and return it. */
@@ -250,7 +255,8 @@ static inline int ds_vyukhov_delete(struct ds_vyukhov_head __arena *head, struct
 				data->value = cell->data.value;
 				
 				/* Release to producer: sequence = pos + mask + 1 (next lap) */
-				arena_atomic_exchange(&cell->sequence, pos + mask + 1, ARENA_RELEASE);
+				// arena_atomic_exchange(&cell->sequence, pos + mask + 1, ARENA_RELEASE);
+				smp_store_release(&cell->sequence, pos + mask + 1);
 				
 				/* Update approximate count (relaxed: just statistics) */
 				arena_atomic_dec(&head->count);

@@ -177,11 +177,8 @@ static inline int ds_list_init(struct ds_list_head __arena *head)
 	if (!head)
 		return DS_ERROR_INVALID;
 	
-	/* Note: Global __arena variables are zero-initialized by the kernel,
-	 * so count is already 0. We only explicitly set first = NULL due to
-	 * BPF verifier limitations that prevent writing to multiple fields.
-	 */
-	head->first = NULL;
+	WRITE_ONCE(head->first, NULL);
+	WRITE_ONCE(head->count, 0);
 	
 	return DS_SUCCESS;
 }
@@ -197,22 +194,9 @@ static inline int ds_list_init(struct ds_list_head __arena *head)
  * Returns: DS_SUCCESS on success, DS_ERROR_NOMEM if allocation fails
  */
 static inline int ds_list_insert(struct ds_list_head __arena *head, __u64 key, __u64 value)
-{
-	struct ds_list_elem __arena *n;
-	
+{	
 	if (!head)
 		ds_list_init(head);
-	
-	// /* Check if key already exists */
-	// list_for_each_entry(n, head, node) {
-	// 	cast_kern(n);
-	// 	if (n->data.key == key) {
-	// 		/* Key exists - update value */
-	// 		n->data.value = value;
-
-	// 		return DS_SUCCESS;
-	// 	}
-	// }
 	
 	/* Allocate new node - returns __arena pointer */
 	struct ds_list_elem __arena *new_node = bpf_arena_alloc(sizeof(*new_node));
