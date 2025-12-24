@@ -5,10 +5,11 @@
 ## What Does This Do?
 
 This framework lets you test **data structures in shared memory** (BPF arena) where:
-- **Kernel-space BPF programs** insert data automatically (via LSM hooks triggered on file creation)
-- **Userspace programs** read the data structure directly (single-threaded, after a sleep period)
+- **Kernel-space BPF programs** insert data automatically (via `lsm.s/inode_create` hooks triggered on file creation).
+- **Userspace programs** read the data structure directly (continuous polling reader).
+- **Zero-copy**: Both access the **same memory** (BPF arena) without copying data.
 
-Both access the **same memory** (BPF arena) without copying data. The kernel populates the data structure automatically when files are created, and userspace can read it directly after sleeping.
+The kernel populates the data structure automatically when files are created (e.g., by running `touch`), and userspace dequeues and prints the data in real-time.
 
 ## Prerequisites Check (2 minutes)
 
@@ -39,16 +40,19 @@ git submodule update --init --recursive
 make
 
 # Run a simple test (needs sudo for BPF)
-sudo ./skeleton -d 5
+sudo ./skeleton
 
 # You should see output like:
 #   Loading BPF program...
 #   BPF programs attached successfully
-#   Sleeping for 5 seconds to allow kernel to populate data structure...
-#   Reading data structure...
-#   Element 0: pid=1234, last_ts=1234567890
+#   Data structure will be lazily initialized on first LSM hook trigger
+#   Kernel inserts triggered automatically on file creation (inode_create)
+#
+#   Starting continuous polling (Ctrl+C to stop)...
+#
+#   Dequeued element 0: pid=1234, ts=1234567890
 #   ...
-#   Total elements in list: 42
+#   Total dequeued: 42
 #   ============================================================
 #                       STATISTICS
 #   ============================================================
@@ -60,27 +64,27 @@ sudo ./skeleton -d 5
 2. **Compiled userspace program** → Single-threaded reader
 3. **Created shared arena** → Both sides access same memory (BPF arena)
 4. **Kernel inserts data** → LSM hook triggers automatically on file creations
-5. **Userspace sleeps 5 seconds** → Allows kernel time to populate data structure
+5. **Userspace collection** → Userspace polls and dequeues elements in real-time while the kernel populates the arena
 6. **Userspace reads results** → Direct arena access, no syscalls needed
 7. **Printed statistics** → Element count, insert statistics
 
 ## Try Different Tests
 
 ```bash
-# Sleep longer to collect more data
-sudo ./skeleton -d 30
+# Run and poll for data
+sudo ./skeleton
 
-# Verify data structure integrity
-sudo ./skeleton -d 5 -v
+# Verify data structure integrity on exit
+sudo ./skeleton -v
 
-# Show statistics (enabled by default)
-sudo ./skeleton -d 5 -s
+# Show statistics on exit (enabled by default)
+sudo ./skeleton -s
 
 # Test the Michael-Scott queue
-sudo ./skeleton_msqueue -d 10
+sudo ./skeleton_msqueue
 
 # Test MS queue with verification
-sudo ./skeleton_msqueue -d 5 -v
+sudo ./skeleton_msqueue -v
 ```
 
 ## Understanding the Output
@@ -119,16 +123,16 @@ libarena_ds.h     - Memory allocator for arena
 ds_api.h          - Template for new data structures
 ds_list.h         - Example: linked list implementation
 skeleton.bpf.c    - Kernel-side test program
-skeleton.c        - Userspace test program
-Makefile.new      - Build system
+skeleton.c        - Userspace test program (continuous poller)
+Makefile          - Build system
 ```
 
 ### Documentation
 
 ```
-GUIDE.md                - Complete guide (read this next!)
-README_FRAMEWORK.md     - Framework overview
-QUICKSTART.md          - This file
+docs/GUIDE.md           - Complete guide (read this next!)
+README.md               - Framework overview
+QUICKSTART.md           - This file
 ```
 
 ### Testing Scripts
@@ -136,8 +140,8 @@ QUICKSTART.md          - This file
 ```
 scripts/test_smoke.sh     - Quick tests (~30 seconds)
 scripts/test_stress.sh    - Heavy tests (~5 minutes)
-test_verify.sh    - Correctness checks
-benchmark.sh      - Performance measurement
+scripts/test_verify.sh    - Correctness checks
+scripts/benchmark.sh      - Performance measurement
 ```
 
 ## Next Steps
@@ -222,8 +226,8 @@ ls ../../third_party/libbpf/src/
 
 **Quick check**:
 ```bash
-# Run with short duration
-sudo ./skeleton -d 1
+# Run and check for immediate errors
+sudo ./skeleton
 
 # Check dmesg for kernel messages
 sudo dmesg | tail -50
@@ -265,14 +269,14 @@ vim src/skeleton.c      # Update includes and types
 # 3. Build
 make clean && make
 
-# 4. Quick test (short sleep)
-sudo ./skeleton -d 2
+# 4. Quick test
+sudo ./skeleton
 
-# 5. Full test (longer sleep with verification)
-sudo ./skeleton -d 10 -v
+# 5. Full test with verification
+sudo ./skeleton -v
 
 # 6. Check statistics
-sudo ./skeleton -d 5 -s
+sudo ./skeleton -s
 ```
 
 ## Cheat Sheet
@@ -285,18 +289,17 @@ make skeleton_msqueue                   # Build just MS queue
 make clean                              # Clean all
 
 # Run (list)
-sudo ./skeleton -d N                    # Sleep N seconds, then read
-sudo ./skeleton -d 5 -v                 # With verification
-sudo ./skeleton -d 10 -s                # With statistics
+sudo ./skeleton                         # Run and poll
+sudo ./skeleton -v                      # With verification on exit
+sudo ./skeleton -s                      # With statistics on exit
 
 # Run (MS queue)
-sudo ./skeleton_msqueue -d N            # Sleep N seconds, then read
-sudo ./skeleton_msqueue -d 5 -v         # With verification
+sudo ./skeleton_msqueue                 # Run and poll
+sudo ./skeleton_msqueue -v              # With verification on exit
 
 # Options
--d N      # Sleep duration in seconds (default: 5)
--v        # Verify data structure integrity
--s        # Print statistics (default: enabled)
+-v        # Verify data structure integrity on exit
+-s        # Print statistics on exit (default: enabled)
 -h        # Show help
 ```
 
@@ -305,8 +308,8 @@ sudo ./skeleton_msqueue -d 5 -v         # With verification
 - [ ] Kernel 6.10+ with `CONFIG_BPF_ARENA=y`
 - [ ] Clang 15+ installed
 - [ ] Built successfully with `make`
-- [ ] Ran `sudo ./skeleton -d 5` without errors
-- [ ] Ran `sudo ./skeleton_msqueue -d 5` without errors
+- [ ] Ran `sudo ./skeleton` without errors
+- [ ] Ran `sudo ./skeleton_msqueue` without errors
 - [ ] Data structure output shows elements
 - [ ] Read GUIDE.md sections you need
 

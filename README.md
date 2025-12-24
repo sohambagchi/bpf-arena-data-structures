@@ -11,14 +11,14 @@ git submodule update --init --recursive
 # Build everything
 make
 
-# Run basic test (kernel LSM hook populates, userspace reads after sleep)
-sudo ./skeleton -d 5
+# Run basic test (kernel LSM hook populates, userspace polls continuously)
+sudo ./skeleton
 
 # Run with verification  
-sudo ./skeleton -d 5 -v
+sudo ./skeleton -v
 
 # See comprehensive guide
-cat GUIDE.md
+cat docs/GUIDE.md
 ```
 
 ## 📋 What's Included
@@ -51,10 +51,10 @@ cat GUIDE.md
 ### Documentation
 
 - **`README.md`** - This file
-- **`GUIDE.md`** - Comprehensive guide (architecture, adding data structures, conventions)
+- **`docs/GUIDE.md`** - Comprehensive guide (architecture, adding data structures, conventions)
 - **`QUICKSTART.md`** - Quick start guide
 - **`INDEX.md`** - Navigation index
-- **`.agent/ARCHITECTURE_DIAGRAMS.md`** - Visual diagrams
+- **`docs/ARCHITECTURE_DIAGRAMS.md`** - Visual diagrams
 
 ### Build System
 
@@ -65,18 +65,19 @@ cat GUIDE.md
 ```
 ┌─────────────────────────────────────────┐
 │         USER SPACE                      │
-│  Single-threaded reader                 │
-│  Direct arena access (no syscalls)      │
-│  Sleeps, then reads data structure      │
+│  Continuous Polling Reader              │
+│  Direct arena access (Zero Copy)        │
+│  Dequeues and prints elements           │
 ├─────────────────────────────────────────┤
 │         BPF ARENA                       │
 │  Shared memory region (up to 4GB)       │
 │  Accessible from both contexts          │
+│  Sync via arena_atomic_* API            │
 ├─────────────────────────────────────────┤
 │         KERNEL SPACE                    │
 │  BPF programs via LSM hooks             │
 │  Inserts triggered by file creation     │
-│  (inode_create LSM hook)                │
+│  (lsm.s/inode_create hook)              │
 └─────────────────────────────────────────┘
 ```
 
@@ -85,24 +86,24 @@ cat GUIDE.md
 ### Basic Testing
 
 ```bash
-# Sleep for 10 seconds while kernel LSM hook inserts data, then read results
-sudo ./skeleton -d 10
+# Run and poll for data (Ctrl+C to stop)
+sudo ./skeleton
 
-# Sleep 5 seconds with data structure verification
-sudo ./skeleton -d 5 -v
+# Run with data structure verification on exit
+sudo ./skeleton -v
 
-# Sleep 5 seconds with statistics output (enabled by default)
-sudo ./skeleton -d 5 -s
+# Run with statistics output (enabled by default)
+sudo ./skeleton -s
 ```
 
 ### Testing MS Queue
 
 ```bash
 # Test Michael-Scott lock-free queue
-sudo ./skeleton_msqueue -d 10
+sudo ./skeleton_msqueue
 
 # With verification
-sudo ./skeleton_msqueue -d 5 -v
+sudo ./skeleton_msqueue -v
 ```
 
 ### Automated Testing
@@ -125,12 +126,11 @@ sudo ./skeleton_msqueue -d 5 -v
 
 DESIGN:
   Kernel:    LSM hook on inode_create inserts items (triggers on file creation)
-  Userspace: Single-threaded reader sleeps, then reads data structure
+  Userspace: Continuously polls and dequeues elements as they arrive
 
 OPTIONS:
-  -d N    Sleep duration in seconds before reading (default: 5)
-  -v      Verify data structure integrity
-  -s      Print statistics (default: enabled)
+  -v      Verify data structure integrity on exit
+  -s      Print statistics on exit (default: enabled)
   -h      Show this help
 
 NOTE: Kernel inserts trigger automatically when files are created on the system.
@@ -206,7 +206,7 @@ Look for `/* DS_API_INSERT */` markers and add:
 
 ```bash
 make clean && make
-sudo ./skeleton -d 5 -v
+sudo ./skeleton -v
 ```
 
 **See `GUIDE.md` for detailed step-by-step instructions.**
@@ -236,8 +236,12 @@ Data Structure State:
 
 1. Kernel LSM hook on `inode_create` triggers on file creation
 2. Each trigger inserts process ID and timestamp into the list
-3. Userspace sleeps for specified duration while kernel populates
-4. After sleep, userspace reads and displays the data structure contents
+3. Userspace programs continuously poll and dequeue from the data
+   structure (the standard pattern in this repo's `skeleton_*` binaries).
+   See per-binary behavior in the `src/` files (e.g., `src/skeleton.c`,
+   `src/skeleton_msqueue.c`).
+4. After collection, userspace prints statistics and optionally verifies
+   integrity.
 
 ## 📁 File Structure
 
@@ -376,7 +380,7 @@ git submodule update --init --recursive
 make
 
 # Test
-sudo ./skeleton -d 5 -v
+sudo ./skeleton -v
 
 # Automated testing
 sudo ./scripts/test_smoke.sh      # Quick (~30s)

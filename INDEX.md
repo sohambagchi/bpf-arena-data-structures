@@ -32,7 +32,7 @@
   - Agent-friendly instructions
 
 ### Visual References
-- **`.agent/ARCHITECTURE_DIAGRAMS.md`** - System diagrams
+- **`docs/ARCHITECTURE_DIAGRAMS.md`** - System diagrams
   - Component interaction
   - Memory layout
   - Data flow
@@ -43,45 +43,41 @@
 ## 💻 Source Code
 
 ### Core Library
-- **`include/libarena_ds.h`** - Arena memory allocator
-  - Per-CPU allocation
-  - Statistics tracking
-  - Atomic operations
+- **`include/libarena_ds.h`** - Arena memory allocator & Atomics
+  - Simple atomic bump allocator
+  - `arena_atomic_*` API for C11-style atomics
+  - Statistics tracking (minimal)
   - ~300 lines, fully documented
 
 ### API Template
 - **`include/ds_api.h`** - Standard interface
-  - Operation definitions
+  - Operation definitions (init, insert, delete, search, verify)
   - Result codes
-  - Statistics structures
-  - Helper macros
-  - ~400 lines with examples
+  - Statistics structures (partially implemented)
+  - ~300 lines
 
 ### Reference Implementations
 - **`include/ds_list.h`** - Doubly-linked list
   - Complete implementation
-  - All API operations
-  - Lock-free operations with atomics
-  - ~352 lines
+  - Lock-free operations with `arena_atomic`
+  - ~350 lines
 
 - **`include/ds_msqueue.h`** - Michael-Scott queue
   - Non-blocking FIFO queue
   - Lock-free enqueue/dequeue
-  - Based on M&S 1996 paper
-  - ~507 lines
+  - ~550 lines
 
 ### Test Framework
 - **`src/skeleton.bpf.c`** - Kernel-side BPF program (list)
   - Arena map definition
-  - LSM hook on inode_create
-  - Operation dispatch
+  - LSM hook on `inode_create`
+  - Lazy initialization
   - ~170 lines
 
-- **`src/skeleton.c`** - Userspace test driver (list)
-  - Single-threaded reader
-  - Sleep then read pattern
+-- **`src/skeleton.c`** - Userspace test driver (list)
+  - Continuous polling reader
   - Statistics collection
-  - ~270 lines
+  - ~260 lines
 
 - **`src/skeleton_msqueue.bpf.c`** - Kernel-side BPF program (MS queue)
   - Arena map definition
@@ -89,9 +85,9 @@
   - MS queue operations
   - ~165 lines
 
-- **`src/skeleton_msqueue.c`** - Userspace test driver (MS queue)
+-- **`src/skeleton_msqueue.c`** - Userspace test driver (MS queue)
   - Single-threaded reader
-  - Sleep then read pattern
+  - Continuous poll/dequeue pattern (throttled polling)
   - Queue-specific operations
   - ~300 lines
 
@@ -141,7 +137,7 @@ These files provide BPF compatibility:
 
 ### "I want to use this framework"
 1. `QUICKSTART.md` (5 min)
-2. Build and run: `make && sudo ./skeleton -d 5`
+2. Build and run: `make && sudo ./skeleton`
 3. `README.md` (10 min)
 4. Relevant sections of `GUIDE.md` as needed
 
@@ -154,20 +150,20 @@ These files provide BPF compatibility:
 
 ### "I want to understand the architecture"
 1. `README.md` → Architecture section
-2. `.agent/ARCHITECTURE_DIAGRAMS.md` → All diagrams
+2. `docs/ARCHITECTURE_DIAGRAMS.md` → All diagrams
 3. `GUIDE.md` → Architecture section
 4. Read source code with understanding of flow
 
 ### "I'm automating/building tools"
 1. `GUIDE.md` → "Agent-Friendly Instructions"
 2. `include/ds_api.h` → Study API patterns
-3. `.agent/ARCHITECTURE_DIAGRAMS.md` → Build pipeline
+3. `docs/ARCHITECTURE_DIAGRAMS.md` → Build pipeline
 
 ### "I'm debugging issues"
 1. `GUIDE.md` → "Troubleshooting" section
 2. Check test output and error messages
-3. `.agent/ARCHITECTURE_DIAGRAMS.md` → Flow diagrams
-4. Run with short duration: `sudo ./skeleton -d 1`
+3. `docs/ARCHITECTURE_DIAGRAMS.md` → Flow diagrams
+4. Run and check for immediate errors: `sudo ./skeleton`
 5. Check `dmesg` for kernel messages
 
 ---
@@ -188,17 +184,14 @@ make help         # Show help
 
 ### Run
 ```bash
-# Basic usage (sleep 5 seconds while kernel populates)
-sudo ./skeleton -d 5
+# Basic usage (polls continuously)
+sudo ./skeleton
 
-# Longer collection period
-sudo ./skeleton -d 30
+# With verification on exit
+sudo ./skeleton -v
 
-# With verification
-sudo ./skeleton -d 5 -v
-
-# With statistics
-sudo ./skeleton -d 10 -s
+# With statistics on exit
+sudo ./skeleton -s
 ```
 
 ### Test
@@ -268,7 +261,7 @@ bpf-arena-data-structures/
 → `GUIDE.md` → "Adding New Data Structures"
 
 **...understand the architecture?**
-→ `.agent/ARCHITECTURE_DIAGRAMS.md` + `GUIDE.md` → "Architecture"
+→ `docs/ARCHITECTURE_DIAGRAMS.md` + `GUIDE.md` → "Architecture"
 
 **...run tests?**
 → `README.md` → "Running Tests"
@@ -317,7 +310,7 @@ Detailed Info → GUIDE.md (relevant section)
       ↓
 Still Stuck → Read source code comments
       ↓
-Architecture → .agent/ARCHITECTURE_DIAGRAMS.md
+Architecture → docs/ARCHITECTURE_DIAGRAMS.md
 ```
 
 ### Debugging Chain
@@ -330,7 +323,7 @@ Build Issue? → Check Makefile comments
       ↓
 Runtime Issue? → Check dmesg: sudo dmesg | tail
       ↓
-Logic Issue? → Review .agent/ARCHITECTURE_DIAGRAMS.md flows
+Logic Issue? → Review docs/ARCHITECTURE_DIAGRAMS.md flows
 ```
 
 ---
@@ -341,7 +334,7 @@ Logic Issue? → Review .agent/ARCHITECTURE_DIAGRAMS.md flows
 - [ ] Read `QUICKSTART.md`
 - [ ] Verified prerequisites (kernel 6.10+, clang 15+)
 - [ ] Built successfully: `make`
-- [ ] Ran basic test: `sudo ./skeleton -d 5`
+- [ ] Ran basic test: `sudo ./skeleton`
 
 ### Adding Data Structure
 - [ ] Created `include/ds_<name>.h` with all API operations
@@ -349,7 +342,7 @@ Logic Issue? → Review .agent/ARCHITECTURE_DIAGRAMS.md flows
 - [ ] Modified `src/skeleton.c` to use new data structure
 - [ ] Built without errors
 - [ ] Passed smoke tests: `sudo ./scripts/test_smoke.sh`
-- [ ] Passed verification: `sudo ./skeleton -d 5 -v`
+- [ ] Passed verification: `sudo ./skeleton -v`
 
 ### Before Production
 - [ ] Passed all smoke tests
@@ -366,7 +359,7 @@ Logic Issue? → Review .agent/ARCHITECTURE_DIAGRAMS.md flows
 ### Level 1: User (1 hour)
 1. Read `QUICKSTART.md`
 2. Build and run basic test
-3. Experiment with different options (-d duration, -v verify, -s stats)
+3. Experiment with different options (-v verify, -s stats)
 4. Understand the output
 
 ### Level 2: Developer (4 hours)
@@ -397,7 +390,7 @@ Logic Issue? → Review .agent/ARCHITECTURE_DIAGRAMS.md flows
 1. make clean
 2. make
 3. sudo ./scripts/test_smoke.sh
-4. sudo ./skeleton -d 5 -v
+4. sudo ./skeleton -v
 5. sudo ./scripts/benchmark.sh
 ```
 
@@ -407,8 +400,8 @@ Logic Issue? → Review .agent/ARCHITECTURE_DIAGRAMS.md flows
 2. Update src/skeleton.bpf.c (marked points)
 3. Update src/skeleton.c (types and calls)
 4. make
-5. sudo ./skeleton -d 1  # Quick test
-6. sudo ./skeleton -d 5 -v  # Full test
+5. sudo ./skeleton  # Quick test
+6. sudo ./skeleton -v  # Full test
 7. sudo ./scripts/test_smoke.sh  # Validation
 ```
 
@@ -418,8 +411,7 @@ Logic Issue? → Review .agent/ARCHITECTURE_DIAGRAMS.md flows
 2. Check GUIDE.md troubleshooting
 3. Run with V=1: make V=1
 4. Check kernel logs: sudo dmesg | tail -50
-5. Run short duration: sudo ./skeleton -d 1
-6. Add debug prints (bpf_printk in BPF, printf in userspace)
+5. Add debug prints (bpf_printk in BPF, printf in userspace)
 ```
 
 ---
@@ -451,7 +443,7 @@ Logic Issue? → Review .agent/ARCHITECTURE_DIAGRAMS.md flows
 Pick your starting point based on your goal:
 
 - **Just want to use it?** → Start with `QUICKSTART.md`
-- **Want to understand it?** → Start with `.agent/ARCHITECTURE_DIAGRAMS.md`
+- **Want to understand it?** → Start with `docs/ARCHITECTURE_DIAGRAMS.md`
 - **Want to extend it?** → Start with `GUIDE.md` section on adding data structures
 - **Want to automate it?** → Start with `GUIDE.md` agent instructions
 
