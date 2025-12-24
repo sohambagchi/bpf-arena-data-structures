@@ -2,16 +2,16 @@
 /* Copyright (c) 2024 Meta Platforms, Inc. and affiliates. */
 #pragma once
 
+#ifndef NUMA_NO_NODE
+#define	NUMA_NO_NODE	(-1)
+#endif
+
 #ifndef WRITE_ONCE
 #define WRITE_ONCE(x, val) ((*(volatile typeof(x) *) &(x)) = (val))
 #endif
 
 #ifndef READ_ONCE
 #define READ_ONCE(x) (*(volatile typeof(x) *)&(x))
-#endif
-
-#ifndef NUMA_NO_NODE
-#define	NUMA_NO_NODE	(-1)
 #endif
 
 #ifndef barrier
@@ -26,16 +26,6 @@ do {						\
 } while (0)
 #endif
 
-/*
-#ifndef smp_load_acquire
-# define smp_load_acquire(p)			\
-({						\
-	typeof(*p) ___p = READ_ONCE(*p);	\
-	barrier();				\
-	___p;					\
-})
-#endif
-*/
 #ifndef smp_load_acquire
 # define smp_load_acquire(p)			\
 ({						\
