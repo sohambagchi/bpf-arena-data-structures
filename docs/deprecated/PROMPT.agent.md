@@ -76,8 +76,10 @@ See GUIDE.md for details. Ask questions if the specification is unclear.
 
 9. **Memory Reclamation Strategy**
    - Current framework uses immediate `bpf_arena_free()` after node removal
-   - **Safe for BPF arena** due to page-level reference counting, but not hazard-pointer safe
-   - For production lock-free structures, consider epoch-based reclamation
+   - **Page-level reference counting:** Each page tracks number of allocated objects; page freed when count reaches zero
+   - **Not hazard-pointer safe:** Individual objects on same page can be freed while other threads access different objects on that page
+   - **Per-CPU allocation:** Reduces contention but doesn't prevent ABA on same-CPU sequential allocations
+   - For production lock-free structures, consider epoch-based reclamation or hazard pointers
    - Document this limitation in your implementation specification
 
 10. **ABA Problem Mitigation**
@@ -110,8 +112,8 @@ A **concurrent data structure testing framework** enabling simultaneous access f
 - Sparse, mmap-able memory region (up to 4GB) shared between kernel BPF and userspace
 - Both sides use real C pointers (not BPF maps)
 - Address space 1 (`__arena` attribute) with automatic LLVM cast handling
-- `bpf_arena_alloc()` - Simple bump allocator for node allocation
-- `bpf_arena_free()` - Memory deallocation (currently no-op in bump allocator)
+- `bpf_arena_alloc()` - Per-CPU page fragment allocator for node allocation
+- `bpf_arena_free()` - Memory deallocation with page-level reference counting (no-op in userspace)
 
 #### 2. **ds_api.h Contract - Required Operations**
 Every data structure MUST implement:
@@ -120,12 +122,16 @@ Every data structure MUST implement:
 - `ds_<name>_delete(head, key)` - Remove element  
 - `ds_<name>_search(head, key)` - Find element
 - `ds_<name>_verify(head)` - Check structural integrity
-- `ds_<name>_iterate(head, callback, ctx)` - Traverse elements
+- `ds_<name>_get_stats(head, stats)` - Get operation statistics
+- `ds_<name>_reset_stats(head)` - Reset statistics counters
+- `ds_<name>_get_metadata()` - Get data structure metadata
+
+**Optional operations:**
+- `ds_<name>_iterate(head, callback, ctx)` - Traverse elements (implemented in reference implementations)
 
 **All operations must:**
 - Return `DS_SUCCESS`, `DS_ERROR_NOMEM`, `DS_ERROR_NOT_FOUND`, `DS_ERROR_INVALID`, etc.
-- Use `__arena` pointers and `bpf_arena_alloc()`
-- Update operation statistics (count, failures)
+- Use `__arena` pointers and `bpf_arena_alloc()`/`bpf_arena_free()`
 - Work in both BPF and userspace contexts
 
 #### 3. **Skeleton Pattern - Dual-Context Programs**
@@ -140,11 +146,15 @@ Every data structure MUST implement:
 - Workload generators and verification
 - No syscalls needed for read operations
 
-#### 4. **Atomic Primitives**
-- `arena_atomic_cmpxchg(ptr, expected, new)` - Compare-and-swap
-- `arena_atomic_exchange(ptr, new)` - Atomic exchange
-- `__sync_fetch_and_add(ptr, value)` - Atomic increment
-- `WRITE_ONCE() / READ_ONCE()` - Volatile access
+#### 4. **Atomic Primitives (C11 with Explicit Memory Ordering)**
+- `arena_atomic_cmpxchg(ptr, old_val, new_val, success_mo, failure_mo)` - Compare-and-swap
+  - Memory orders: `ARENA_RELAXED`, `ARENA_ACQUIRE`, `ARENA_RELEASE`, `ARENA_ACQ_REL`, `ARENA_SEQ_CST`
+- `arena_atomic_exchange(ptr, val, mo)` - Atomic exchange
+- `arena_atomic_add(ptr, val, mo)` - Atomic fetch-and-add
+- `arena_atomic_sub(ptr, val, mo)` - Atomic fetch-and-subtract
+- `arena_atomic_load(ptr, mo)` / `arena_atomic_store(ptr, val, mo)` - Explicit atomic access
+- Convenience: `arena_atomic_inc(ptr)`, `arena_atomic_dec(ptr)` - Relaxed increment/decrement
+- `WRITE_ONCE() / READ_ONCE()` - Volatile access (alternative to atomic load/store)
 
 **ABA mitigation:** Framework provides natural protection via arena page metadata. Explicit version counters NOT required.
 
@@ -211,8 +221,9 @@ static inline int ds_<name>_insert(struct ds_<name>_head __arena *head,
     if (!node) return DS_ERROR_NOMEM;
     
     // Algorithm implementation with arena_atomic_* as needed
+    // Example: arena_atomic_cmpxchg(&ptr, old, new, ARENA_ACQ_REL, ARENA_RELAXED)
     
-    __sync_fetch_and_add(&head->count, 1);  // Atomic if lock-free
+    arena_atomic_inc(&head->count);  // Relaxed atomic increment
     return DS_SUCCESS;
 }
 
@@ -244,10 +255,12 @@ static inline int ds_<name>_verify(struct ds_<name>_head __arena *head) {
 ## Files to Include
 
 1. `ds_api.h` - API contract
-2. `libarena_ds.h` - Memory allocator
-3. `ds_list.h` - Reference implementation (blocking)
-4. `ds_msqueue.h` - Reference implementation (lock-free)
-5. `skeleton.bpf.c` - Kernel skeleton template
-6. `skeleton.c` - Userspace skeleton template
-7. `GUIDE.md` - Framework guide
-8. [Your data structure specification document - the output you're producing]
+2. `libarena_ds.h` - Per-CPU page fragment allocator
+3. `ds_list.h` - Reference implementation (doubly-linked list with locking)
+4. `ds_msqueue.h` - Reference implementation (Michael-Scott lock-free FIFO queue)
+5. `ds_mpsc.h` - Reference implementation (Vyukhov's MPSC unbounded queue)
+6. `ds_vyukhov.h` - Reference implementation (Vyukhov's bounded MPMC queue)
+7. `skeleton.bpf.c` - Kernel skeleton template
+8. `skeleton.c` - Userspace skeleton template
+9. `GUIDE.md` - Framework guide
+10. [Your data structure specification document - the output you're producing]

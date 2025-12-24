@@ -3,75 +3,75 @@
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         USER SPACE                              │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │       skeleton.c / skeleton_msqueue.c                    │   │
-│  │                                                          │   │
-│  │  ┌────────────────────────────────────────────────────┐  │   │
-│  │  │  Main Thread (Single-threaded reader)              │  │   │
-│  │  │                                                    │  │   │
-│  │  │  1. Sleep for N seconds (default: 5)               │  │   │
-│  │  │  2. Read data structure from arena                 │  │   │
-│  │  │  3. Iterate and print elements                     │  │   │
-│  │  │  4. Print statistics                               │  │   │
-│  │  │  5. Optionally verify integrity                    │  │   │
-│  │  └────────────────────┬───────────────────────────────┘  │   │
-│  │                       │                                  │   │
-│  │                 Direct Access                            │   │
-│  │                  (read-only)                             │   │
-│  └───────────────────────┼──────────────────────────────────┘   │
-│                            │                                    │
-│                            ↓                                    │
-├─────────────────────────────────────────────────────────────────┤
-│                       BPF ARENA                                 │
-│              (Shared Memory - up to 4GB)                        │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  Page 0: Data Structure Head                             │   │
-│  │    • ds_list_head (or ds_tree_head, etc.)                │   │
-│  │    • Statistics counters                                 │   │
-│  │    • Control variables                                   │   │
-│  ├──────────────────────────────────────────────────────────┤   │
-│  │  Pages 1-N: Dynamically Allocated Nodes                  │   │
-│  │                                                          │   │
-│  │    Node 1          Node 2          Node 3                │   │
-│  │  ┌────────┐      ┌────────┐      ┌────────┐              │   │
-│  │  │key: 42 │  ┌──→│key: 73 │  ┌──→│key: 91 │              │   │
-│  │  │val: 84 │  │   │val: 146│  │   │val: 182│              │   │
-│  │  │next: ───┼──┘   │next: ───┼──┘   │next:NULL            │   │
-│  │  └────────┘      └────────┘      └────────┘              │   │
-│  │                                                          │   │
-│  │  Memory allocated by: bpf_arena_alloc()                  │   │
-│  │  Memory freed by: bpf_arena_free()                       │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                            ↑                                    │
-│                      Access from both:                          │
-│                            │                                    │
-├─────────────────────────────────────────────────────────────────┤
-│                       KERNEL SPACE                              │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │       skeleton.bpf.c / skeleton_msqueue.bpf.c            │   │
-│  │                                                          │   │
-│  │  ┌────────────────────────────────────────────────────┐  │   │
-│  │  │  LSM Hook: lsm.s/inode_create                      │  │   │
-│  │  │                                                    │  │   │
-│  │  │  Triggers on: File creation                        │  │   │
-│  │  │  Action: Insert (pid, timestamp) into data struct  │  │   │
-│  │  │                                                    │  │   │
-│  │  │  Uses: ds_list_insert() or ds_msqueue_insert()     │  │   │
-│  │  │                                                    │  │   │
-│  │  │  Automatically increments counters:                │  │   │
-│  │  │    - total_kernel_ops                              │  │   │
-│  │  │    - total_kernel_failures (on error)              │  │   │
-│  │  └────────────────────────────────────────────────────┘  │   │
-│  │                                                          │   │
-│  │          Direct DS operation calls                       │   │
-│  │          (no operation dispatch needed)                  │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│                         USER SPACE                            │
+│                                                               │
+│  ┌────────────────────────────────────────────────────────┐   │
+│  │       skeleton.c / skeleton_msqueue.c                  │   │
+│  │                                                        │   │
+│  │  ┌──────────────────────────────────────────────────┐  │   │
+│  │  │  Main Thread (Continuous Reader)                 │  │   │
+│  │  │                                                  │  │   │
+│  │  │  1. Polls arena for new data                     │  │   │
+│  │  │  2. Dequeues elements (e.g., ds_list_pop)        │  │   │
+│  │  │  3. Prints elements to stdout                    │  │   │
+│  │  │  4. Prints statistics on exit                    │  │   │
+│  │  │  5. Optionally verify integrity (-v)              │  │   │
+│  │  └────────────────────┬─────────────────────────────┘  │   │
+│  │                       │                                │   │
+│  │                 Direct Access                          │   │
+│  │                  (Zero Copy)                           │   │
+│  └───────────────────────┼────────────────────────────────┘   │
+│                          │                                    │
+│                          ↓                                    │
+├───────────────────────────────────────────────────────────────┤
+│                       BPF ARENA                               │
+│              (Shared Memory - up to 4GB)                      │
+│                                                               │
+│  ┌────────────────────────────────────────────────────────┐   │
+│  │  Page 0: Data Structure Head                           │   │
+│  │    • ds_list_head (or ds_msqueue, etc.)                │   │
+│  │    • Global Statistics (total_ops, failures)           │   │
+│  │    • Control variables (initialized flag)              │   │
+│  ├────────────────────────────────────────────────────────┤   │
+│  │  Pages 1-N: Dynamically Allocated Nodes                │   │
+│  │                                                        │   │
+│  │    Node 1          Node 2          Node 3              │   │
+│  │  ┌────────┐      ┌────────┐      ┌─────────┐           │   │
+│  │  │key: PID│  ┌──→│key: PID│  ┌──→│key: PID │           │   │
+│  │  │val: TS │  │   │val: TS │  │   │val: TS  │           │   │
+│  │  │next: ──┼──┘   │next: ──┼──┘   │next:NULL│           │   │
+│  │  └────────┘      └────────┘      └─────────┘           │   │
+│  │                                                        │   │
+│  │  Memory allocated by: bpf_arena_alloc()                │   │
+│  │  Synchronization: arena_atomic_* API                   │   │
+│  └────────────────────────────────────────────────────────┘   │
+│                            ↑                                  │
+│                      Access from both:                        │
+│                            │                                  │
+├───────────────────────────────────────────────────────────────┤
+│                       KERNEL SPACE                            │
+│                                                               │
+│  ┌────────────────────────────────────────────────────────┐   │
+│  │       skeleton.bpf.c / skeleton_msqueue.bpf.c          │   │
+│  │                                                        │   │
+│  │  ┌──────────────────────────────────────────────────┐  │   │
+│  │  │  LSM Hook: lsm.s/inode_create                    │  │   │
+│  │  │                                                  │  │   │
+│  │  │  Triggers on: File creation (e.g., touch)        │  │   │
+│  │  │  Action: Insert (pid, timestamp) into data struct│  │   │
+│  │  │                                                  │  │   │
+│  │  │  Uses: ds_list_insert() or ds_msqueue_insert()   │  │   │
+│  │  │                                                  │  │   │
+│  │  │  Updates BSS counters:                           │  │   │
+│  │  │    - total_kernel_ops                            │  │   │
+│  │  │    - total_kernel_failures                       │  │   │
+│  │  └──────────────────────────────────────────────────┘  │   │
+│  │                                                        │   │
+│  │          Direct DS operation calls                     │   │
+│  └────────────────────────────────────────────────────────┘   │
+└───────────────────────────────────────────────────────────────┘
+```
 ```
 
 ## Component Interaction Flow
@@ -82,11 +82,11 @@
 │  (runs test)│
 └──────┬──────┘
        │
-       │ sudo ./skeleton -t 4 -o 1000
+       │ sudo ./skeleton
        ↓
 ┌──────────────────┐
 │   skeleton.c     │ ←── Loads BPF program
-│   (userspace)    │ ←── Creates pthread workers
+│   (userspace)    │ ←── Starts polling loop
 └────────┬─────────┘
          │
          │ skeleton_bpf__open_and_load()

@@ -12,26 +12,66 @@
 
 ---
 
+## Non-uniform Items and TODOs
+
+This section documents differences between the documentation baseline and the current
+implementation in `include/` and `src/`. Items are split into two categories:
+- **TODO (can be unified)**: changes that should be made to code/docs to make behavior uniform.
+- **Exceptions (must differ)**: implemented differences that are required for correctness.
+
+Non-uniform items discovered:
+
+- **Userspace collection pattern**: most `src/skeleton_*` binaries implement a continuous
+  poll-and-dequeue loop (prints elements as they arrive). Some older docs
+  describe a sleep-then-read pattern.  
+  - TODO: Standardize on the continuous polling pattern as the default.
+
+- **`init()` signatures**: most data structures expose `ds_<name>_init(head)` but the
+  `vyukhov` implementation requires `ds_vyukhov_init(head, capacity)`.  
+  - Exception: bounded queues require an explicit capacity parameter — this cannot be
+    safely inferred.  
+  - TODO: Standardize `init()` to accept a `struct ds_options` pointer to handle optional parameters like capacity uniformly.
+
+- **`delete` / `pop` signatures**: `ds_api.h` describes `ds_<name>_delete(head, key)`;
+  several implementations (MS Queue, Vyukhov) expose `ds_<name>_delete(head, struct ds_kv *out)`
+  which is effectively a `pop()` operation.
+  - TODO: Formally introduce `pop()` into `ds_api.h` and distinguish it from `delete(key)`.
+
+- **Statistics Implementation**: `ds_api.h` defines a complex `ds_stats` structure, but the current simplified implementation only tracks `total_kernel_ops` and `total_kernel_failures` in the BPF skeleton's BSS.
+  - TODO: Either fully implement `ds_stats` across all data structures or simplify `ds_api.h` to match the current minimal tracking.
+
+- **LSM Hook Consistency**: All skeletons currently use `lsm.s/inode_create`. Some comments still refer to `path_mkdir` or `file_open`.
+  - TODO: Update all comments to consistently refer to `inode_create`.
+
+Exceptions (must remain different):
+
+- **Bounded queues require capacity**: `ds_vyukhov_init()` must accept capacity.
+- **Algorithm-specific semantics**: MS-Queue requires a dummy node; Vyukhov requires sequence numbers. These internal differences are expected.
+
+How this was applied to docs:
+- Updated `README.md`, `QUICKSTART.md`, and `INDEX.md` to reflect continuous polling
+  behavior and fixed incorrect paths that pointed to `.agent/*` (now `docs/*`).
+- Added this section to `docs/GUIDE.md` so future contributors can prioritize
+  the TODOs above when unifying APIs and behaviors.
 ## Overview
 
-This framework provides a testing infrastructure for **concurrent data structures** that operate across both **kernel space** (BPF programs) and **user space** (direct arena access). It uses **BPF arena** - a sparse shared memory region that allows both kernel and userspace to access the same memory using real C pointers.
+This framework provides a testing infrastructure for **concurrent data structures** that operate across both **kernel space** (BPF programs) and **user space** (direct arena access). It uses **BPF arena** (`BPF_MAP_TYPE_ARENA`) - a sparse shared memory region that allows both kernel and userspace to access the same memory using real C pointers.
 
 ### Key Features
 
-- **Kernel-driven population**: LSM hooks automatically insert data when files are created
-- **Zero-copy access**: Userspace directly accesses arena memory without syscalls  
-- **Lock-free primitives**: Built-in atomic operations for concurrent access
-- **Verification support**: Data structure integrity checking
-- **Modular design**: Easy to add new data structures
-- **Simple execution model**: Kernel inserts via LSM hook, userspace reads after sleep
-- **Two implementations**: Doubly-linked list and Michael-Scott queue
+- **Kernel-driven population**: `lsm.s/inode_create` hooks automatically insert data (PID and timestamp) when files are created.
+- **Zero-copy access**: Userspace directly accesses arena memory without syscalls.
+- **Arena Atomic API**: Built-in `arena_atomic_*` wrappers for GCC `__atomic` built-ins, providing C11-style memory ordering (Acquire/Release).
+- **Verification support**: Data structure integrity checking.
+- **Modular design**: Easy to add new data structures using the `ds_api.h` template.
+- **Continuous Polling**: Userspace readers typically poll and dequeue elements in real-time.
 
 ### Use Cases
 
-- Testing concurrent data structure implementations
-- Benchmarking lock-free algorithms
-- Validating correctness under concurrent access
-- Performance comparison between kernel and userspace operations
+- Testing concurrent data structure implementations.
+- Benchmarking lock-free algorithms using `arena_atomic` primitives.
+- Validating correctness under concurrent access from multiple contexts.
+- Performance comparison between kernel and userspace operations.
 
 ---
 
@@ -43,41 +83,66 @@ This framework provides a testing infrastructure for **concurrent data structure
 ┌─────────────────────────────────────────────────────┐
 │                     USER SPACE                      │
 ├─────────────────────────────────────────────────────┤
-│  skeleton.c                                         │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │
-│  │  Thread 1   │  │  Thread 2   │  │  Thread N   │  │
-│  │  (insert)   │  │  (search)   │  │  (delete)   │  │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  │
-│         │                │                │         │
-│         └────────────────┴────────────────┘         │
+│  skeleton.c (Continuous Reader)                     │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  while (true) {                               │  │
+│  │    data = ds_pop(head);                       │  │
+│  │    if (data) print(data);                     │  │
+│  │  }                                            │  │
+│  └───────────────────────┬───────────────────────┘  │
 │                          │                          │
 │                    Direct Access                    │
+│                     (Zero Copy)                     │
+│                          ↓                          │
+├─────────────────────────────────────────────────────┤
+│                   BPF ARENA MAP                     │
+│            (Shared Memory Backing Store)            │
+├─────────────────────────────────────────────────────┤
+│                          ↑                          │
+│                    Direct Access                    │
+│                     (Zero Copy)                     │
 │                          │                          │
-├──────────────────────────┼──────────────────────────┤
-│                    BPF ARENA                        │
-│              (Shared Memory Region)                 │
-│                                                     │
+├─────────────────────────────────────────────────────┤
+│                    KERNEL SPACE                     │
+├─────────────────────────────────────────────────────┤
+│  skeleton.bpf.c (LSM Hook)                          │
 │  ┌───────────────────────────────────────────────┐  │
-│  │  Data Structure (ds_list, ds_tree, etc.)      │  │
-│  │  - Nodes allocated with bpf_arena_alloc()     │  │
-│  │  - Accessible from both contexts              │  │
+│  │  SEC("lsm.s/inode_create")                    │  │
+│  │  int hook(...) {                              │  │
+│  │    ds_insert(head, pid, ts);                  │  │
+│  │  }                                            │  │
 │  └───────────────────────────────────────────────┘  │
-│                          │                          │
-├─────────────────────────────────────────────────────┤
-│                   KERNEL SPACE                      │
-├─────────────────────────────────────────────────────┤
-│  src/skeleton.bpf.c / src/skeleton_msqueue.bpf.c    │
-│  ┌─────────────────────────────────────────────┐    │
-│  │ LSM Hook: lsm.s/inode_create                │    │
-│  │                                             │    │
-│  │ Triggers on: File creation                  │    │
-│  │ Action: Insert (pid, timestamp) pair        │    │
-│  │                                             │    │
-│  │ Uses: ds_list_insert() or                   │    │
-│  │       ds_msqueue_insert()                   │    │
-│  └─────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────┘
 ```
+
+### Memory Model: BPF Arena & Atomics
+
+The project relies on `BPF_MAP_TYPE_ARENA` as the backing store. This map type allows for a large, sparse virtual memory area that is shared between the BPF program and userspace.
+
+#### The `arena_atomic` API
+
+To ensure correctness in concurrent environments, we use the `arena_atomic_*` API defined in `include/libarena_ds.h`. These macros wrap GCC's `__atomic` built-ins and are compatible with BPF arena pointers.
+
+Key primitives include:
+- `arena_atomic_cmpxchg(ptr, old, new, success_mo, failure_mo)`
+- `arena_atomic_exchange(ptr, val, mo)`
+- `arena_atomic_add(ptr, val, mo)`
+- `arena_atomic_load(ptr, mo)`
+- `arena_atomic_store(ptr, val, mo)`
+
+Supported memory orderings:
+- `ARENA_RELAXED`
+- `ARENA_ACQUIRE`
+- `ARENA_RELEASE`
+- `ARENA_ACQ_REL`
+- `ARENA_SEQ_CST`
+
+### The Pipeline: `inode_create` -> Polling
+
+1. **Trigger**: A file is created on the system (e.g., `touch /tmp/test`).
+2. **Kernel Action**: The `lsm.s/inode_create` hook triggers. It retrieves the current PID and timestamp, then calls the data structure's `insert` operation.
+3. **Shared State**: The data is placed directly into the BPF Arena.
+4. **Userspace Action**: The userspace program (`skeleton.c`) runs a continuous loop, polling the data structure (e.g., via `pop` or `iterate`) and printing results.
 
 ### Memory Layout
 
@@ -92,8 +157,8 @@ Arena Virtual Address Space (up to 4GB)
 │                                    │
 │  ┌─────────────┐  ┌─────────────┐  │
 │  │ Node 1      │  │ Node 2      │  │
-│  │ key: 100    │  │ key: 200    │  │
-│  │ value: 200  │  │ value: 400  │  │
+│  │ key: PID    │  │ key: PID    │  │
+│  │ value: TS   │  │ value: TS   │  │
 │  │ next: ───────→ │ next: NULL  │  │
 │  └─────────────┘  └─────────────┘  │
 │                                    │
@@ -108,19 +173,21 @@ Arena Virtual Address Space (up to 4GB)
 ### Execution Flow
 
 1. **Initialization**: 
-   - Userspace loads BPF program via skeleton
-   - Arena is automatically mmap'd into userspace
-   - BPF program initializes data structure in arena
+   - Userspace loads BPF program via skeleton.
+   - Arena is automatically mmap'd into userspace.
+   - Data structure is lazily initialized in the arena on the first kernel trigger.
 
-2. **Concurrent Operations**:
-   - Userspace threads: Direct arena access (no syscalls)
-   - Kernel threads: Via syscall tracepoints or manual triggers
-   - Both use the same arena memory with atomic operations
+2. **Kernel Operations**:
+   - The `lsm.s/inode_create` hook triggers on file creation (e.g., `touch`).
+   - It inserts the current PID and timestamp into the data structure using `arena_atomic` primitives.
 
-3. **Verification**:
-   - Userspace: Walk data structure directly
-   - Kernel: Trigger verification via BPF program
-   - Both check consistency and compute statistics
+3. **Userspace Operations**:
+   - The userspace program runs a continuous polling loop.
+   - It dequeues elements directly from the arena (zero-copy) and prints them.
+
+4. **Verification & Stats**:
+   - On exit (Ctrl+C), userspace can optionally verify the data structure's integrity.
+   - Final statistics (total ops, failures) are printed from the BPF BSS.
 
 ---
 
@@ -168,14 +235,11 @@ make V=1
 ### Quick Test
 
 ```bash
-# Run the skeleton test (5 second collection period)
-sudo ./skeleton -d 5
+# Run the skeleton test (Ctrl+C to stop)
+sudo ./skeleton
 
-# Run with verification
-sudo ./skeleton -d 5 -v
-
-# Run arena_list example (original reference)
-sudo ./arena_list 100
+# Run with verification on exit
+sudo ./skeleton -v
 ```
 
 ---
@@ -334,32 +398,25 @@ Edit `src/skeleton.c` to use your data structure:
 #include "ds_tree.h"  // ADD THIS
 ```
 
-**2. Update the reader function** (line ~70):
+**2. Update the polling function** (line ~70):
 ```c
-static void read_data_structure()
+static void poll_and_dequeue()
 {
-    printf("Sleeping for %d seconds to allow kernel to populate data structure...\n", 
-           config.sleep_seconds);
-    sleep(config.sleep_seconds);
-    
     struct ds_tree_head *head = skel->bss->ds_head;  // Change to your type
-
-    if (!head) {
-        printf("Data structure not yet initialized\n");
-        return;
+    struct ds_kv data;
+    int result;
+    
+    printf("Starting continuous polling (Ctrl+C to stop)...\n\n");
+    
+    while (!stop_test) {
+        result = ds_tree_pop(head, &data);  // Use your pop/dequeue API
+        
+        if (result == DS_SUCCESS) {
+            printf("Dequeued: key=%llu, value=%llu\n", data.key, data.value);
+        } else if (result == DS_ERROR_NOT_FOUND) {
+            continue;  // Keep polling
+        }
     }
-    
-    printf("Reading data structure...\n");
-    
-    /* Use your ds_<name>_iterate API */
-    print_count = 0;
-    __u64 visited = ds_tree_iterate(head, print_element_callback, NULL);
-    
-    if (visited >= 10) {
-        printf("  ... (showing first 10 elements)\n");
-    }
-    
-    printf("Total elements in tree: %llu\n", head->count);
 }
 ```
 
@@ -389,10 +446,10 @@ static int verify_data_structure(void)
 make clean && make
 
 # Test your new data structure (kernel will populate via LSM)
-sudo ./skeleton -d 10
+sudo ./skeleton
 
-# Verify integrity
-sudo ./skeleton -d 5 -v
+# Verify integrity on exit
+sudo ./skeleton -v
 ```
 
 ---
@@ -402,17 +459,14 @@ sudo ./skeleton -d 5 -v
 ### Basic Testing
 
 ```bash
-# Simple test: collect data for 5 seconds
-sudo ./skeleton -d 5
+# Run and poll for data (Ctrl+C to stop)
+sudo ./skeleton
 
-# Longer collection period
-sudo ./skeleton -d 30
+# Run with verification on exit
+sudo ./skeleton -v
 
-# With verification
-sudo ./skeleton -d 5 -v
-
-# With statistics output
-sudo ./skeleton -d 10 -s
+# Run with statistics output (enabled by default)
+sudo ./skeleton -s
 ```
 
 ### Command-Line Options
@@ -423,16 +477,15 @@ Usage: ./skeleton_msqueue [OPTIONS]
 
 DESIGN:
   Kernel:    LSM hook on inode_create inserts items (triggers on file creation)
-  Userspace: Single-threaded reader sleeps, then reads the data structure
+  Userspace: Continuously polls and dequeues elements as they arrive
 
 OPTIONS:
-  -d N    Sleep duration in seconds before reading (default: 5)
-  -v      Verify data structure integrity
-  -s      Print statistics (default: enabled)
+  -v      Verify data structure integrity on exit
+  -s      Print statistics on exit (default: enabled)
   -h      Show help
 
 NOTE: Kernel inserts trigger automatically when files are created on the system.
-      No manual operation triggering needed - just let it sleep and collect data.
+      Userspace continuously dequeues and prints elements.
 ```
 
 ### Automated Tests
@@ -450,13 +503,13 @@ They reference command-line options (`-t`, `-o`, `-w`) that the current simple i
 ### Understanding Test Output
 
 ```
-Reading data structure...
-  Element 0: pid=1234, last_ts=1234567890
-  Element 1: pid=1235, last_ts=1234567891
-  Element 2: pid=1236, last_ts=1234567892
-  ...
-  (showing first 10 elements)
-Total elements in list: 342
+Starting continuous polling (Ctrl+C to stop)...
+
+Dequeued element 0: pid=1234, ts=1234567890
+Dequeued element 1: pid=1235, ts=1234567891
+Dequeued element 2: pid=1236, ts=1234567892
+...
+Total dequeued: 342
 
 ============================================================
                     STATISTICS
@@ -535,20 +588,19 @@ typedef struct ds_<name>_node ds_<name>_node_t;
 ### BPF Program Sections
 
 ```c
-// Syscall tracepoints (for automatic triggers)
-SEC("tp/syscalls/sys_enter_<syscall>")
-int trace_<syscall>(struct trace_event_raw_sys_enter *ctx)
+// LSM Hooks (for automatic triggers on file creation)
+SEC("lsm.s/inode_create")
+int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t mode)
 
-// Manual triggers (called via bpf_prog_test_run)
+// Manual triggers (optional, called via bpf_prog_test_run)
 SEC("syscall")
-int <operation_name>(void *ctx)
+int handle_operation(struct ds_operation *op)
 ```
 
-Common syscall tracepoints:
-- `sys_enter_execve` - Program execution (frequent)
-- `sys_enter_exit_group` - Process exit
-- `sys_enter_openat` - File opening
-- `sys_enter_write` - Write operations
+Common LSM hooks:
+- `inode_create` - Triggered on file creation (e.g., `touch`)
+- `file_open` - Triggered on file open
+- `socket_create` - Triggered on socket creation
 
 ### Customization Markers
 
@@ -738,15 +790,11 @@ tests:
     expected: "Build succeeds, no errors"
   
   - name: "Basic functionality"
-    command: "sudo ./skeleton -t 1 -o 100 -w insert"
+    command: "sudo ./skeleton"
     expected: "Completes without errors"
   
-  - name: "Concurrent access"
-    command: "sudo ./skeleton -t 8 -o 1000 -w mixed"
-    expected: "All threads complete, low failure rate"
-  
   - name: "Verification"
-    command: "sudo ./skeleton -t 4 -o 500 -v"
+    command: "sudo ./skeleton -v"
     expected: "Verification passes"
   
   - name: "Memory cleanup"
