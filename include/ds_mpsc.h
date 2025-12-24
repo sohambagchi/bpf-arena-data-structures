@@ -33,15 +33,13 @@
 /**
  * struct ds_mpsc_node - Single node in the MPSC queue
  * @next: Pointer to next node
- * @key: User data key
- * @value: User data value
+ * @data: User data (key-value pair)
  * 
  * Nodes are linked via the next pointer to form a singly-linked list.
  */
 struct ds_mpsc_node {
 	struct ds_mpsc_node __arena *next;
-	__u64 key;
-	__u64 value;
+	struct ds_kv data;
 };
 
 /**
@@ -110,8 +108,8 @@ static inline int ds_mpsc_init(struct ds_mpsc_head __arena *ctx)
 	
 	/* Initialize stub (data fields are zero, next is NULL) */
 	WRITE_ONCE(stub->next, NULL);
-	WRITE_ONCE(stub->key, 0);
-	WRITE_ONCE(stub->value, 0);
+	WRITE_ONCE(stub->data.key, 0);
+	WRITE_ONCE(stub->data.value, 0);
 	
 	/* Both head and tail point to stub */
 	ctx->head = stub;
@@ -162,10 +160,11 @@ static inline int ds_mpsc_insert(struct ds_mpsc_head __arena *ctx,
 	cast_kern(n);
 	
 	/* 2. Setup node (next=NULL means this will be the new terminator) */
-	n->key = key;
-	n->value = value;
+	n->data.key = key;
+	n->data.value = value;
 	n->next = NULL;
-	
+
+	cast_user(n);	
 	/* 3. Serialization point: Atomic Exchange
 	 * RELEASE ordering ensures all writes to node are visible
 	 * before the node is published to other threads.
@@ -254,8 +253,8 @@ static inline int ds_mpsc_delete(struct ds_mpsc_head __arena *ctx,
 	cast_kern(next);
 	
 	/* Read the data */
-	output->key = next->key;
-	output->value = next->value;
+	output->key = next->data.key;
+	output->value = next->data.value;
 	
 	/* Move tail forward (only consumer modifies tail, no atomic needed) */
 	ctx->tail = next;
@@ -342,7 +341,7 @@ static inline int ds_mpsc_search(struct ds_mpsc_head __arena *ctx, __u64 key)
 		cast_kern(curr);
 		
 		/* Skip the dummy node (current tail) - data starts at tail->next */
-		if (curr->key == key && curr != ctx->tail) {
+		if (curr->data.key == key && curr != ctx->tail) {
 			return DS_SUCCESS;
 		}
 		
