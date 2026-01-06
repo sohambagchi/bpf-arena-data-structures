@@ -97,7 +97,7 @@ static __always_inline int init_data_structure(void)
  * The hook inserts a (pid, timestamp) pair into the MPSC queue.
  */
 SEC("lsm.s/inode_create")
-int BPF_PROG(restrict_dir, struct inode *dir, struct dentry *dentry, umode_t mode)
+int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	__u64 pid;
 	__u64 ts;
