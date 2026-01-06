@@ -24,7 +24,7 @@ zgrep CONFIG_BPF_ARENA /proc/config.gz
 # 3. Check clang version (need 15+)
 clang --version
 
-# If any of these fail, see GUIDE.md section "Prerequisites"
+# If any of these fail, see docs/GUIDE.md section "Prerequisites"
 ```
 
 ## Build and Run (5 minutes)
@@ -70,21 +70,20 @@ sudo ./skeleton
 
 ## Try Different Tests
 
+After the basic run above, try other data structures:
+
 ```bash
-# Run and poll for data
-sudo ./skeleton
-
-# Verify data structure integrity on exit
-sudo ./skeleton -v
-
-# Show statistics on exit (enabled by default)
-sudo ./skeleton -s
-
 # Test the Michael-Scott queue
 sudo ./skeleton_msqueue
 
 # Test MS queue with verification
 sudo ./skeleton_msqueue -v
+
+# Test other data structures
+sudo ./skeleton_bst        # Binary Search Tree
+sudo ./skeleton_bintree    # Ellen's Binary Tree
+sudo ./skeleton_mpsc       # MPSC Queue
+sudo ./skeleton_vyukhov    # Vyukhov MPSC Queue
 ```
 
 ## Understanding the Output
@@ -122,6 +121,11 @@ Data Structure State:
 libarena_ds.h     - Memory allocator for arena
 ds_api.h          - Template for new data structures
 ds_list.h         - Example: linked list implementation
+ds_msqueue.h      - Michael-Scott lock-free queue
+ds_bst.h          - Binary Search Tree
+ds_bintree.h      - Ellen's Binary Tree
+ds_mpsc.h         - MPSC Queue
+ds_vyukhov.h      - Vyukhov MPSC Queue
 skeleton.bpf.c    - Kernel-side test program
 skeleton.c        - Userspace test program (continuous poller)
 Makefile          - Build system
@@ -156,14 +160,14 @@ sudo ./scripts/test_smoke.sh
 sudo ./scripts/test_stress.sh
 
 # Check correctness
-sudo ./test_verify.sh
+sudo ./scripts/test_verify.sh
 ```
 
 ### 2. Read the Full Guide (30 minutes)
 
 ```bash
 # Open the comprehensive guide
-less GUIDE.md
+less docs/GUIDE.md
 
 # Or in your browser/editor
 # Key sections:
@@ -174,7 +178,7 @@ less GUIDE.md
 
 ### 3. Add Your Own Data Structure (1-2 hours)
 
-Follow the guide in `GUIDE.md` → "Adding New Data Structures"
+Follow the guide in `docs/GUIDE.md` → "Adding New Data Structures"
 
 Example: Add a binary search tree
 - Create `ds_tree.h`
@@ -222,7 +226,7 @@ ls ../../third_party/libbpf/src/
 
 ### Program crashes or hangs
 
-**Cause**: Various (see GUIDE.md troubleshooting section)
+**Cause**: Various (see docs/GUIDE.md troubleshooting section)
 
 **Quick check**:
 ```bash
@@ -250,7 +254,7 @@ Functions:               ds_<name>_<op>    (e.g., ds_tree_insert)
 
 ## Getting Help
 
-1. **Read GUIDE.md** - Most questions answered there
+1. **Read docs/GUIDE.md** - Most questions answered there
 2. **Check existing code** - `ds_list.h` is a complete example
 3. **Look for markers** - `/* DS_API_INSERT */` shows where to modify
 4. **Run tests** - `scripts/test_smoke.sh` catches common issues
@@ -311,7 +315,7 @@ sudo ./skeleton_msqueue -v              # With verification on exit
 - [ ] Ran `sudo ./skeleton` without errors
 - [ ] Ran `sudo ./skeleton_msqueue` without errors
 - [ ] Data structure output shows elements
-- [ ] Read GUIDE.md sections you need
+- [ ] Read docs/GUIDE.md sections you need
 
 **All checked? You're ready to add your own data structures!**
 
@@ -319,7 +323,7 @@ sudo ./skeleton_msqueue -v              # With verification on exit
 
 **Still stuck?** Read the comprehensive guide:
 ```bash
-less GUIDE.md
+less docs/GUIDE.md
 # Or
-cat GUIDE.md | grep -A 20 "Troubleshooting"
+cat docs/GUIDE.md | grep -A 20 "Troubleshooting"
 ```

@@ -48,7 +48,7 @@
 - `GUIDE.md` - Comprehensive framework guide
 - `README.md` - Quick reference
 - `QUICKSTART.md` - Beginner guide
-- `.agent/ARCHITECTURE_DIAGRAMS.md` - Visual reference
+- `docs/ARCHITECTURE_DIAGRAMS.md` - Visual reference
 
 - [ ] Update all docs to reflect simplified LSM-based model (no statistics, no multi-threaded userspace)
 - [ ] Remove references to non-existent features (statistics tracking removed)

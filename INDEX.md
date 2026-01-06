@@ -23,7 +23,7 @@
   - Key features
 
 ### For Developers
-- **`GUIDE.md`** - Comprehensive reference (READ THIS!)
+- **`docs/GUIDE.md`** - Comprehensive reference (READ THIS!)
   - Architecture details
   - Step-by-step guide to add data structures
   - Running tests
@@ -67,6 +67,22 @@
   - Lock-free enqueue/dequeue
   - ~550 lines
 
+- **`include/ds_bst.h`** - Binary Search Tree
+  - Standard BST implementation
+  - ~400 lines
+
+- **`include/ds_bintree.h`** - Ellen's Binary Tree
+  - Lock-free binary search tree
+  - ~600 lines
+
+- **`include/ds_mpsc.h`** - MPSC Queue
+  - Multi-producer single-consumer queue
+  - ~300 lines
+
+- **`include/ds_vyukhov.h`** - Vyukhov MPSC Queue
+  - Optimized MPSC queue by Dmitry Vyukhov
+  - ~350 lines
+
 ### Test Framework
 - **`src/skeleton.bpf.c`** - Kernel-side BPF program (list)
   - Arena map definition
@@ -74,7 +90,7 @@
   - Lazy initialization
   - ~170 lines
 
--- **`src/skeleton.c`** - Userspace test driver (list)
+- **`src/skeleton.c`** - Userspace test driver (list)
   - Continuous polling reader
   - Statistics collection
   - ~260 lines
@@ -85,11 +101,20 @@
   - MS queue operations
   - ~165 lines
 
--- **`src/skeleton_msqueue.c`** - Userspace test driver (MS queue)
+- **`src/skeleton_msqueue.c`** - Userspace test driver (MS queue)
   - Single-threaded reader
   - Continuous poll/dequeue pattern (throttled polling)
   - Queue-specific operations
   - ~300 lines
+
+- **`src/skeleton_bst.bpf.c`** - Kernel-side BPF program (BST)
+- **`src/skeleton_bst.c`** - Userspace test driver (BST)
+- **`src/skeleton_bintree.bpf.c`** - Kernel-side BPF program (Ellen's Tree)
+- **`src/skeleton_bintree.c`** - Userspace test driver (Ellen's Tree)
+- **`src/skeleton_mpsc.bpf.c`** - Kernel-side BPF program (MPSC)
+- **`src/skeleton_mpsc.c`** - Userspace test driver (MPSC)
+- **`src/skeleton_vyukhov.bpf.c`** - Kernel-side BPF program (Vyukhov)
+- **`src/skeleton_vyukhov.c`** - Userspace test driver (Vyukhov)
 
 ### Build System
 - **`Makefile`** - Build system
@@ -139,11 +164,11 @@ These files provide BPF compatibility:
 1. `QUICKSTART.md` (5 min)
 2. Build and run: `make && sudo ./skeleton`
 3. `README.md` (10 min)
-4. Relevant sections of `GUIDE.md` as needed
+4. Relevant sections of `docs/GUIDE.md` as needed
 
 ### "I want to add a data structure"
 1. `QUICKSTART.md` for basic setup
-2. `GUIDE.md` → "Adding New Data Structures" section
+2. `docs/GUIDE.md` → "Adding New Data Structures" section
 3. Study `include/ds_list.h` as reference
 4. Follow markers in `src/skeleton.bpf.c` and `src/skeleton.c`
 5. Build and test
@@ -151,16 +176,16 @@ These files provide BPF compatibility:
 ### "I want to understand the architecture"
 1. `README.md` → Architecture section
 2. `docs/ARCHITECTURE_DIAGRAMS.md` → All diagrams
-3. `GUIDE.md` → Architecture section
+3. `docs/GUIDE.md` → Architecture section
 4. Read source code with understanding of flow
 
 ### "I'm automating/building tools"
-1. `GUIDE.md` → "Agent-Friendly Instructions"
+1. `docs/GUIDE.md` → "Agent-Friendly Instructions"
 2. `include/ds_api.h` → Study API patterns
 3. `docs/ARCHITECTURE_DIAGRAMS.md` → Build pipeline
 
 ### "I'm debugging issues"
-1. `GUIDE.md` → "Troubleshooting" section
+1. `docs/GUIDE.md` → "Troubleshooting" section
 2. Check test output and error messages
 3. `docs/ARCHITECTURE_DIAGRAMS.md` → Flow diagrams
 4. Run and check for immediate errors: `sudo ./skeleton`
@@ -210,19 +235,25 @@ make test                             # Via Makefile
 ```
 bpf-arena-data-structures/
 │
-├── Documentation/
-│   ├── QUICKSTART.md              ⭐ Start here for beginners
-│   ├── README.md                  ⭐ Framework overview
+├── QUICKSTART.md                  ⭐ Start here for beginners
+├── README.md                      ⭐ Framework overview
+├── INDEX.md                       ⭐ This file
+├── docs/                          ⭐ Documentation
 │   ├── GUIDE.md                   ⭐ Complete reference
-│   ├── INDEX.md                   ⭐ This file
-│   └── .agent/
-│       └── ARCHITECTURE_DIAGRAMS.md   Visual guides
+│   ├── ARCHITECTURE_DIAGRAMS.md   Visual guides
+│   ├── analysis/
+│   ├── deprecated/
+│   └── spec/
 │
 ├── include/                       ⭐ Header files
 │   ├── libarena_ds.h              ⭐ Memory allocator
 │   ├── ds_api.h                   ⭐ API template
 │   ├── ds_list.h                  ⭐ Reference: linked list
 │   ├── ds_msqueue.h               ⭐ Michael-Scott queue
+│   ├── ds_bst.h                   Binary Search Tree
+│   ├── ds_bintree.h               Ellen's Binary Tree
+│   ├── ds_mpsc.h                  MPSC Queue
+│   ├── ds_vyukhov.h               Vyukhov MPSC Queue
 │   ├── bpf_arena_common.h         Common definitions
 │   └── bpf_experimental.h         BPF features
 │
@@ -230,7 +261,15 @@ bpf-arena-data-structures/
 │   ├── skeleton.bpf.c             ⭐ Kernel-side driver (list)
 │   ├── skeleton.c                 ⭐ Userspace driver (list)
 │   ├── skeleton_msqueue.bpf.c     ⭐ Kernel-side driver (queue)
-│   └── skeleton_msqueue.c         ⭐ Userspace driver (queue)
+│   ├── skeleton_msqueue.c         ⭐ Userspace driver (queue)
+│   ├── skeleton_bst.bpf.c         Kernel-side driver (BST)
+│   ├── skeleton_bst.c             Userspace driver (BST)
+│   ├── skeleton_bintree.bpf.c     Kernel-side driver (Ellen's Tree)
+│   ├── skeleton_bintree.c         Userspace driver (Ellen's Tree)
+│   ├── skeleton_mpsc.bpf.c        Kernel-side driver (MPSC)
+│   ├── skeleton_mpsc.c            Userspace driver (MPSC)
+│   ├── skeleton_vyukhov.bpf.c     Kernel-side driver (Vyukhov)
+│   └── skeleton_vyukhov.c         Userspace driver (Vyukhov)
 │
 ├── scripts/                       ⭐ Test scripts
 │   ├── test_smoke.sh              ⭐ Smoke tests
@@ -258,33 +297,33 @@ bpf-arena-data-structures/
 → `QUICKSTART.md`
 
 **...add a new data structure?**
-→ `GUIDE.md` → "Adding New Data Structures"
+→ `docs/GUIDE.md` → "Adding New Data Structures"
 
 **...understand the architecture?**
-→ `docs/ARCHITECTURE_DIAGRAMS.md` + `GUIDE.md` → "Architecture"
+→ `docs/ARCHITECTURE_DIAGRAMS.md` + `docs/GUIDE.md` → "Architecture"
 
 **...run tests?**
 → `README.md` → "Running Tests"
 
 **...fix build errors?**
-→ `GUIDE.md` → "Troubleshooting" → "Compilation Issues"
+→ `docs/GUIDE.md` → "Troubleshooting" → "Compilation Issues"
 
 **...fix runtime errors?**
-→ `GUIDE.md` → "Troubleshooting" → "Runtime Issues"
+→ `docs/GUIDE.md` → "Troubleshooting" → "Runtime Issues"
 
 **...interpret test output?**
 → `README.md` → "Understanding Test Output"
 
 **...improve performance?**
-→ `GUIDE.md` → "Troubleshooting" → "Performance Issues"
+→ `docs/GUIDE.md` → "Troubleshooting" → "Performance Issues"
 
 **...automate/integrate?**
-→ `GUIDE.md` → "Agent-Friendly Instructions"
+→ `docs/GUIDE.md` → "Agent-Friendly Instructions"
 
 ### "What is..."
 
 **...BPF arena?**
-→ `GUIDE.md` → "Overview" or `README.md` (original tutorial)
+→ `docs/GUIDE.md` → "Overview" or `README.md` (original tutorial)
 
 **...the skeleton pattern?**
 → `README.md` → "Architecture"
@@ -306,7 +345,7 @@ bpf-arena-data-structures/
 ```
 Quick Question → QUICKSTART.md
       ↓
-Detailed Info → GUIDE.md (relevant section)
+Detailed Info → docs/GUIDE.md (relevant section)
       ↓
 Still Stuck → Read source code comments
       ↓
@@ -317,7 +356,7 @@ Architecture → docs/ARCHITECTURE_DIAGRAMS.md
 ```
 Error Occurred → Check error message
       ↓
-Common Issue? → GUIDE.md → Troubleshooting
+Common Issue? → docs/GUIDE.md → Troubleshooting
       ↓
 Build Issue? → Check Makefile comments
       ↓
@@ -363,7 +402,7 @@ Logic Issue? → Review docs/ARCHITECTURE_DIAGRAMS.md flows
 4. Understand the output
 
 ### Level 2: Developer (4 hours)
-1. Read `GUIDE.md` thoroughly
+1. Read `docs/GUIDE.md` thoroughly
 2. Study `include/ds_list.h` implementation
 3. Add a simple data structure (e.g., stack)
 4. Run all tests
@@ -408,7 +447,7 @@ Logic Issue? → Review docs/ARCHITECTURE_DIAGRAMS.md flows
 ### Debugging Workflow
 ```bash
 1. Reproduce issue with minimal test
-2. Check GUIDE.md troubleshooting
+2. Check docs/GUIDE.md troubleshooting
 3. Run with V=1: make V=1
 4. Check kernel logs: sudo dmesg | tail -50
 5. Add debug prints (bpf_printk in BPF, printf in userspace)
@@ -424,12 +463,16 @@ Logic Issue? → Review docs/ARCHITECTURE_DIAGRAMS.md flows
 | `include/ds_api.h` | Code | ~400 | API template |
 | `include/ds_list.h` | Code | ~450 | List implementation |
 | `include/ds_msqueue.h` | Code | ~507 | MS Queue implementation |
+| `include/ds_bst.h` | Code | ~400 | BST implementation |
+| `include/ds_bintree.h` | Code | ~600 | Ellen's Tree implementation |
+| `include/ds_mpsc.h` | Code | ~300 | MPSC implementation |
+| `include/ds_vyukhov.h` | Code | ~350 | Vyukhov implementation |
 | `src/skeleton.bpf.c` | Code | ~170 | Kernel driver (list) |
 | `src/skeleton.c` | Code | ~270 | Userspace driver (list) |
 | `src/skeleton_msqueue.bpf.c` | Code | ~165 | Kernel driver (queue) |
 | `src/skeleton_msqueue.c` | Code | ~300 | Userspace driver (queue) |
 | `Makefile` | Build | ~350 | Build system |
-| `GUIDE.md` | Doc | ~800 | Complete guide |
+| `docs/GUIDE.md` | Doc | ~800 | Complete guide |
 | `QUICKSTART.md` | Doc | ~320 | Quick start |
 | `README.md` | Doc | ~350 | Overview |
 | Test scripts | Shell | ~400 | Testing |
@@ -444,7 +487,7 @@ Pick your starting point based on your goal:
 
 - **Just want to use it?** → Start with `QUICKSTART.md`
 - **Want to understand it?** → Start with `docs/ARCHITECTURE_DIAGRAMS.md`
-- **Want to extend it?** → Start with `GUIDE.md` section on adding data structures
-- **Want to automate it?** → Start with `GUIDE.md` agent instructions
+- **Want to extend it?** → Start with `docs/GUIDE.md` section on adding data structures
+- **Want to automate it?** → Start with `docs/GUIDE.md` agent instructions
 
 **Happy testing!** 🚀

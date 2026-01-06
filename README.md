@@ -36,8 +36,20 @@ cat docs/GUIDE.md
 - **`skeleton.c`** - Userspace reader program (single-threaded)
 - **`skeleton_msqueue.bpf.c`** - Kernel-side BPF program for MS Queue
 - **`skeleton_msqueue.c`** - Userspace reader for MS Queue
+- **`skeleton_bst.bpf.c`** - Kernel-side BPF program for Binary Search Tree
+- **`skeleton_bst.c`** - Userspace reader for Binary Search Tree
+- **`skeleton_bintree.bpf.c`** - Kernel-side BPF program for Ellen's Binary Tree
+- **`skeleton_bintree.c`** - Userspace reader for Ellen's Binary Tree
+- **`skeleton_mpsc.bpf.c`** - Kernel-side BPF program for MPSC Queue
+- **`skeleton_mpsc.c`** - Userspace reader for MPSC Queue
+- **`skeleton_vyukhov.bpf.c`** - Kernel-side BPF program for Vyukhov MPSC Queue
+- **`skeleton_vyukhov.c`** - Userspace reader for Vyukhov MPSC Queue
 - **`ds_list.h`** - Reference implementation (doubly-linked list)
 - **`ds_msqueue.h`** - Michael-Scott lock-free queue implementation
+- **`ds_bst.h`** - Binary Search Tree implementation
+- **`ds_bintree.h`** - Ellen's Binary Tree implementation
+- **`ds_mpsc.h`** - MPSC Queue implementation
+- **`ds_vyukhov.h`** - Vyukhov MPSC Queue implementation
 
 ### Testing Infrastructure
 
@@ -104,6 +116,22 @@ sudo ./skeleton_msqueue
 
 # With verification
 sudo ./skeleton_msqueue -v
+```
+
+### Testing Other Data Structures
+
+```bash
+# Binary Search Tree
+sudo ./skeleton_bst
+
+# Ellen's Binary Tree
+sudo ./skeleton_bintree
+
+# MPSC Queue
+sudo ./skeleton_mpsc
+
+# Vyukhov MPSC Queue
+sudo ./skeleton_vyukhov
 ```
 
 ### Automated Testing
@@ -209,7 +237,7 @@ make clean && make
 sudo ./skeleton -v
 ```
 
-**See `GUIDE.md` for detailed step-by-step instructions.**
+**See `docs/GUIDE.md` for detailed step-by-step instructions.**
 
 ## 📊 Understanding Test Output
 
@@ -255,23 +283,35 @@ bpf-arena-data-structures/
 │
 ├── Data Structure Implementations
 │   ├── ds_list.h               # Doubly-linked list ⭐
-│   └── ds_msqueue.h            # Michael-Scott queue ⭐
+│   ├── ds_msqueue.h            # Michael-Scott queue ⭐
+│   ├── ds_bst.h                # Binary Search Tree
+│   ├── ds_bintree.h            # Ellen's Binary Tree
+│   ├── ds_mpsc.h               # MPSC Queue
+│   └── ds_vyukhov.h            # Vyukhov MPSC Queue
 │
 ├── Test Programs
 │   ├── skeleton.bpf.c          # Kernel BPF program (list) ⭐
 │   ├── skeleton.c              # Userspace reader (list) ⭐
 │   ├── skeleton_msqueue.bpf.c  # Kernel BPF program (queue) ⭐
-│   └── skeleton_msqueue.c      # Userspace reader (queue) ⭐
+│   ├── skeleton_msqueue.c      # Userspace reader (queue) ⭐
+│   ├── skeleton_bst.bpf.c      # Kernel BPF program (BST)
+│   ├── skeleton_bst.c          # Userspace reader (BST)
+│   ├── skeleton_bintree.bpf.c  # Kernel BPF program (Ellen's Tree)
+│   ├── skeleton_bintree.c      # Userspace reader (Ellen's Tree)
+│   ├── skeleton_mpsc.bpf.c     # Kernel BPF program (MPSC)
+│   ├── skeleton_mpsc.c         # Userspace reader (MPSC)
+│   ├── skeleton_vyukhov.bpf.c  # Kernel BPF program (Vyukhov)
+│   └── skeleton_vyukhov.c      # Userspace reader (Vyukhov)
 │
 ├── Build System
 │   └── Makefile                # Build system ⭐
 │
 ├── Documentation
-│   ├── README.md               # This file
-│   ├── GUIDE.md                # Comprehensive guide ⭐
-│   ├── QUICKSTART.md           # Quick start guide
-│   ├── INDEX.md                # Navigation index
-│   └── .agent/ARCHITECTURE_DIAGRAMS.md # Visual diagrams
+│   ├── README.md                     # This file
+│   ├── docs/GUIDE.md                 # Comprehensive guide ⭐
+│   ├── QUICKSTART.md                 # Quick start guide
+│   ├── INDEX.md                      # Navigation index
+│   └── docs/ARCHITECTURE_DIAGRAMS.md # Visual diagrams
 │
 ├── Test Scripts
 │   ├── scripts/test_smoke.sh           # Smoke tests
@@ -356,7 +396,7 @@ bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
 
 ## 📚 Additional Resources
 
-- **Comprehensive Guide**: See `GUIDE.md` for detailed documentation
+- **Comprehensive Guide**: See `docs/GUIDE.md` for detailed documentation
 - **Linux BPF Arena**: `Documentation/bpf/arena.rst` in kernel source
 - **libbpf**: https://libbpf.readthedocs.io/
 
@@ -366,8 +406,8 @@ This framework is designed to be agent-friendly:
 
 - **Standardized API**: All data structures follow `ds_api.h` template
 - **Clear insertion points**: Look for `/* DS_API_INSERT */` markers
-- **JSON schema**: See `GUIDE.md` for structured metadata format
-- **Testing checklist**: See `GUIDE.md` for automated testing guidance
+- **JSON schema**: See `docs/GUIDE.md` for structured metadata format
+- **Testing checklist**: See `docs/GUIDE.md` for automated testing guidance
 - **Common patterns**: Reference implementations in `ds_list.h`
 
 ## ⚡ Quick Reference
@@ -400,4 +440,4 @@ Based on BPF arena examples from the Linux kernel, Copyright (c) 2024 Meta Platf
 
 ---
 
-**Ready to test concurrent data structures? Start with `GUIDE.md` for comprehensive documentation!**
+**Ready to test concurrent data structures? Start with `docs/GUIDE.md` for comprehensive documentation!**

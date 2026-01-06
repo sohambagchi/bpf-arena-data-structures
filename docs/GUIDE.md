@@ -21,38 +21,48 @@ implementation in `include/` and `src/`. Items are split into two categories:
 
 Non-uniform items discovered:
 
-- **Userspace collection pattern**: most `src/skeleton_*` binaries implement a continuous
-  poll-and-dequeue loop (prints elements as they arrive). Some older docs
-  describe a sleep-then-read pattern.  
-  - TODO: Standardize on the continuous polling pattern as the default.
-
 - **`init()` signatures**: most data structures expose `ds_<name>_init(head)` but the
   `vyukhov` implementation requires `ds_vyukhov_init(head, capacity)`.  
   - Exception: bounded queues require an explicit capacity parameter — this cannot be
     safely inferred.  
   - TODO: Standardize `init()` to accept a `struct ds_options` pointer to handle optional parameters like capacity uniformly.
 
-- **`delete` / `pop` signatures**: `ds_api.h` describes `ds_<name>_delete(head, key)`;
-  several implementations (MS Queue, Vyukhov) expose `ds_<name>_delete(head, struct ds_kv *out)`
-  which is effectively a `pop()` operation.
-  - TODO: Formally introduce `pop()` into `ds_api.h` and distinguish it from `delete(key)`.
+- **`delete` / `pop` signatures**: `ds_api.h` declares both `ds_<name>_delete(head, key)`
+  and `ds_<name>_pop(head, struct ds_kv *out)`, but current implementations vary:
+  - `ds_msqueue` and `ds_vyukhov` only expose `pop()`.
+  - `ds_mpsc_delete()` consumes via `struct ds_kv *out` (pop semantics) and `ds_mpsc_pop()` returns 1/0.
+  - `ds_bintree_delete()` accepts a `struct ds_kv` instead of a key.
+  - TODO: Align delete/pop signatures or provide consistent wrappers.
 
-- **Statistics Implementation**: `ds_api.h` defines a complex `ds_stats` structure, but the current simplified implementation only tracks `total_kernel_ops` and `total_kernel_failures` in the BPF skeleton's BSS.
-  - TODO: Either fully implement `ds_stats` across all data structures or simplify `ds_api.h` to match the current minimal tracking.
+- **Statistics Implementation**: `ds_api.h` defines `struct ds_stats`, but current data
+  structures do not implement `get_stats`/`reset_stats`. Skeletons only track
+  `total_kernel_ops` and `total_kernel_failures`, plus per-structure counters (e.g. list `head->count`).
+  - TODO: Either implement `ds_stats` across all data structures or remove it from the API.
 
-- **LSM Hook Consistency**: All skeletons currently use `lsm.s/inode_create`. Some comments still refer to `path_mkdir` or `file_open`.
-  - TODO: Update all comments to consistently refer to `inode_create`.
+- **LSM hook wording**: All skeletons attach to `lsm.s/inode_create`, but a couple of
+  userspace comments still mention `execve`.
+  - TODO: Update comments to consistently refer to `inode_create`.
 
 Exceptions (must remain different):
 
 - **Bounded queues require capacity**: `ds_vyukhov_init()` must accept capacity.
 - **Algorithm-specific semantics**: MS-Queue requires a dummy node; Vyukhov requires sequence numbers. These internal differences are expected.
 
-How this was applied to docs:
-- Updated `README.md`, `QUICKSTART.md`, and `INDEX.md` to reflect continuous polling
-  behavior and fixed incorrect paths that pointed to `.agent/*` (now `docs/*`).
-- Added this section to `docs/GUIDE.md` so future contributors can prioritize
-  the TODOs above when unifying APIs and behaviors.
+Use this list to track real code/doc mismatches and resolve them as the API evolves.
+
+## Implemented Data Structures
+
+The framework currently includes the following data structure implementations:
+
+| Data Structure | Header | Skeleton | Description |
+|----------------|--------|----------|-------------|
+| **Doubly-Linked List** | `ds_list.h` | `skeleton` | Reference implementation with lock-free operations. |
+| **Michael-Scott Queue** | `ds_msqueue.h` | `skeleton_msqueue` | Standard lock-free FIFO queue. |
+| **Binary Search Tree** | `ds_bst.h` | `skeleton_bst` | Standard BST implementation. |
+| **Ellen's Binary Tree** | `ds_bintree.h` | `skeleton_bintree` | Lock-free binary search tree. |
+| **MPSC Queue** | `ds_mpsc.h` | `skeleton_mpsc` | Multi-producer single-consumer queue. |
+| **Vyukhov MPSC Queue** | `ds_vyukhov.h` | `skeleton_vyukhov` | Optimized MPSC queue by Dmitry Vyukhov. |
+
 ## Overview
 
 This framework provides a testing infrastructure for **concurrent data structures** that operate across both **kernel space** (BPF programs) and **user space** (direct arena access). It uses **BPF arena** (`BPF_MAP_TYPE_ARENA`) - a sparse shared memory region that allows both kernel and userspace to access the same memory using real C pointers.
@@ -274,7 +284,6 @@ struct ds_tree_node {
 struct ds_tree_head {
     struct ds_tree_node __arena *root;
     __u64 count;
-    struct ds_stats stats;
 };
 
 /* ========================================================================
@@ -288,9 +297,7 @@ static inline int ds_tree_init(struct ds_tree_head *head)
     
     head->root = NULL;
     head->count = 0;
-    
-    /* Initialize stats... */
-    
+
     return DS_SUCCESS;
 }
 
@@ -303,7 +310,7 @@ static inline int ds_tree_insert(struct ds_tree_head *head, __u64 key, __u64 val
     
     /* ... rest of insertion logic ... */
     
-    head->stats.ops[DS_OP_INSERT].count++;
+    head->count++;
     return DS_SUCCESS;
 }
 
@@ -314,7 +321,13 @@ static inline int ds_tree_delete(struct ds_tree_head *head, __u64 key)
     return DS_SUCCESS;
 }
 
-static inline int ds_tree_search(struct ds_tree_head *head, __u64 key, __u64 *value)
+static inline int ds_tree_pop(struct ds_tree_head *head, struct ds_kv *data)
+{
+    /* Optional: implement a dequeue-style removal (e.g., min element) */
+    return DS_ERROR_NOT_FOUND;
+}
+
+static inline int ds_tree_search(struct ds_tree_head *head, __u64 key)
 {
     /* Implement search */
     return DS_SUCCESS;
@@ -324,16 +337,6 @@ static inline int ds_tree_verify(struct ds_tree_head *head)
 {
     /* Verify tree properties (balance, ordering, etc.) */
     return DS_SUCCESS;
-}
-
-static inline void ds_tree_get_stats(struct ds_tree_head *head, struct ds_stats *stats)
-{
-    /* Copy statistics */
-}
-
-static inline void ds_tree_reset_stats(struct ds_tree_head *head)
-{
-    /* Reset statistics */
 }
 
 static inline const struct ds_metadata* ds_tree_get_metadata(void)
@@ -380,7 +383,7 @@ case DS_OP_INIT:
     break;
     
 case DS_OP_INSERT:
-    result = ds_tree_insert(&global_tree_head, op->key, op->value);
+    result = ds_tree_insert(&global_tree_head, op->kv.key, op->kv.value);
     break;
     
 /* ... etc ... */
@@ -419,6 +422,10 @@ static void poll_and_dequeue()
     }
 }
 ```
+
+Note: return conventions differ by implementation (e.g., `ds_mpsc_pop()` returns 1/0 for
+success/empty, while `ds_list_pop()` and `ds_msqueue_pop()` return `DS_SUCCESS`/`DS_ERROR_NOT_FOUND`).
+Check the target `include/ds_*.h` file and match its return codes.
 
 **3. Update verification function** (if implementing verify):
 ```c
@@ -554,22 +561,26 @@ ds_<name>_<operation>
 Examples:
 - `ds_list_insert()` - Insert into list
 - `ds_tree_search()` - Search in tree
-- `ds_queue_delete()` - Delete from queue
+- `ds_queue_pop()` - Dequeue from queue
 
 ### Required Operations
 
-Every data structure **MUST** implement:
+Current implementations provide a common core but do not share identical signatures.
 
 | Operation | Purpose | Return Value |
 |-----------|---------|--------------|
 | `ds_<name>_init()` | Initialize empty structure | `DS_SUCCESS` |
 | `ds_<name>_insert()` | Add key-value pair | `DS_SUCCESS` or `DS_ERROR_*` |
-| `ds_<name>_delete()` | Remove key | `DS_SUCCESS` or `DS_ERROR_NOT_FOUND` |
-| `ds_<name>_search()` | Find key, return value | `DS_SUCCESS` or `DS_ERROR_NOT_FOUND` |
+| `ds_<name>_search()` | Find key | `DS_SUCCESS` or `DS_ERROR_NOT_FOUND` |
 | `ds_<name>_verify()` | Check integrity | `DS_SUCCESS` or `DS_ERROR_CORRUPT` |
-| `ds_<name>_get_stats()` | Retrieve statistics | void |
-| `ds_<name>_reset_stats()` | Clear statistics | void |
 | `ds_<name>_get_metadata()` | Get metadata | pointer to metadata |
+| `ds_<name>_pop()` | Dequeue/remove next element | `DS_SUCCESS`/`DS_ERROR_*` (see per-impl notes) |
+| `ds_<name>_delete()` | Remove by key | Implemented by list/bst/bintree; signatures vary |
+| `ds_<name>_get_stats()` | Retrieve statistics | Not implemented in current structures |
+| `ds_<name>_reset_stats()` | Clear statistics | Not implemented in current structures |
+
+Note: current data structures do not use `DS_API_DECLARE`, so signatures are
+hand-written per header. Check the specific `include/ds_*.h` file you target.
 
 ### Type Naming
 
@@ -591,16 +602,11 @@ typedef struct ds_<name>_node ds_<name>_node_t;
 // LSM Hooks (for automatic triggers on file creation)
 SEC("lsm.s/inode_create")
 int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t mode)
-
-// Manual triggers (optional, called via bpf_prog_test_run)
-SEC("syscall")
-int handle_operation(struct ds_operation *op)
 ```
 
 Common LSM hooks:
 - `inode_create` - Triggered on file creation (e.g., `touch`)
-- `file_open` - Triggered on file open
-- `socket_create` - Triggered on socket creation
+Other LSM hooks are possible, but the current repository only uses `inode_create`.
 
 ### Customization Markers
 
@@ -690,11 +696,10 @@ bpf_printk("Debug: key=%llu, value=%llu", key, value);
 sudo cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-**Check arena statistics**:
+**Check skeleton statistics**:
 ```c
-// Access via skeleton
-printf("Current allocations: %llu\n", 
-       skel->bss->global_stats.current_allocations);
+printf("Total inserts: %llu\n", skel->bss->total_kernel_ops);
+printf("Insert failures: %llu\n", skel->bss->total_kernel_failures);
 ```
 
 ---
@@ -704,6 +709,9 @@ printf("Current allocations: %llu\n",
 This section provides structured information for automated agents.
 
 ### JSON Schema for Data Structure Definition
+
+This schema is illustrative; current headers do not wire `struct ds_stats` into
+the skeletons, and queue-like structures typically include a `pop()` operation.
 
 ```json
 {
@@ -730,14 +738,14 @@ This section provides structured information for automated agents.
       "struct_name": "ds_tree_head",
       "fields": [
         {"name": "root", "type": "struct ds_tree_node __arena *"},
-        {"name": "count", "type": "__u64"},
-        {"name": "stats", "type": "struct ds_stats"}
+        {"name": "count", "type": "__u64"}
       ]
     },
     "operations": {
       "init": "ds_tree_init",
       "insert": "ds_tree_insert",
       "delete": "ds_tree_delete",
+      "pop": "ds_tree_pop",
       "search": "ds_tree_search",
       "verify": "ds_tree_verify"
     },
@@ -758,28 +766,28 @@ This section provides structured information for automated agents.
 ### File Structure Template
 
 ```
-bpf_arena/
-├── libarena_ds.h          # Arena allocation library
-├── ds_api.h               # API definitions and macros
-├── bpf_arena_common.h     # Common definitions
-├── ds_<name>.h            # Your data structure (IMPLEMENT THIS)
-├── skeleton.bpf.c         # Kernel-side test driver
-├── skeleton.c             # Userspace test driver
-├── Makefile.new           # Build system
-└── GUIDE.md              # This file
+bpf-arena-data-structures/
+├── include/               # Headers (ds_api.h, ds_*.h, atomics)
+├── src/                   # Skeletons and BPF programs
+├── docs/                  # Documentation (this file lives here)
+├── scripts/               # Test/benchmark scripts
+├── third_party/           # libbpf, bpftool, vmlinux
+├── Makefile               # Build system
+├── README.md
+├── QUICKSTART.md
+└── INDEX.md
 ```
 
 ### Modification Points
 
-1. **ds_<name>.h**: Implement all required operations
-2. **skeleton.bpf.c**: 
-   - Line 30: Include header
-   - Line 40: Declare head
-   - Line 70-100: Update `handle_operation()` dispatch
-3. **skeleton.c**:
-   - Line 20: Include header
-   - Line 100: Update worker context type
-   - Line 150: Update workload functions
+1. **include/ds_<name>.h**: Implement init/insert/search/verify and the correct delete/pop variants
+2. **src/skeleton.bpf.c**:
+   - Add your header at the `DS_API_INSERT` include marker
+   - Declare the head in BSS (see the existing `global_ds_head`)
+   - Update `handle_operation()` to dispatch to your API
+3. **src/skeleton.c**:
+   - Include your header
+   - Update `poll_and_dequeue()` and verification to call your API
 
 ### Testing Checklist
 
@@ -796,9 +804,6 @@ tests:
   - name: "Verification"
     command: "sudo ./skeleton -v"
     expected: "Verification passes"
-  
-  - name: "Memory cleanup"
-    expected: "current_allocations ≈ final element count"
 ```
 
 ### Common Patterns
@@ -820,14 +825,6 @@ while (n && can_loop) {
     // Process n
     n = n->next;
 }
-```
-
-**Statistics update**:
-```c
-head->stats.ops[DS_OP_INSERT].count++;
-head->stats.current_elements++;
-if (head->stats.current_elements > head->stats.max_elements)
-    head->stats.max_elements = head->stats.current_elements;
 ```
 
 ---
