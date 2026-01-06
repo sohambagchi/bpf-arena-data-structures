@@ -173,7 +173,9 @@ static inline int __msqueue_add_node(struct ds_msqueue_elem __arena *new_node, s
 	cast_user(tail);
 	cast_user(new_node);
 	/* Successfully linked, now try to swing tail to new node */
-	(void)arena_atomic_cmpxchg(&queue->tail, tail, new_node, ARENA_RELEASE, ARENA_RELAXED);
+	if (arena_atomic_cmpxchg(&queue->tail, tail, new_node, ARENA_RELEASE, ARENA_RELAXED) != tail) {
+		/* Failed to update tail, but it's okay - another thread will help */
+	}
 		
 	return DS_SUCCESS;
 }
