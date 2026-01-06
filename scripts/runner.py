@@ -14,7 +14,7 @@ from typing import List
 
 def find_executables() -> List[str]:
     """Find compiled executables in current directory."""
-    candidates = ['skeleton', 'skeleton_msqueue', 'skeleton_vyukhov', 'skeleton_mpsc']
+    candidates = ['skeleton', 'skeleton_msqueue', 'skeleton_vyukhov', 'skeleton_mpsc', 'skeleton_bst']
     executables = []
     
     for exe in candidates:
