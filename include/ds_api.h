@@ -53,6 +53,7 @@ enum ds_op_type {
 	DS_OP_INIT = 0,
 	DS_OP_INSERT,
 	DS_OP_DELETE,
+	DS_OP_POP,
 	DS_OP_SEARCH,
 	DS_OP_VERIFY,
 	DS_OP_ITERATE,
@@ -127,6 +128,7 @@ struct ds_v {
 	static inline int ds_##name##_init(ds_##name##_head_t *head); \
 	static inline int ds_##name##_insert(ds_##name##_head_t *head, __u64 key, __u64 value); \
 	static inline int ds_##name##_delete(ds_##name##_head_t *head, __u64 key); \
+	static inline int ds_##name##_pop(ds_##name##_head_t *head, struct ds_kv *out); \
 	static inline int ds_##name##_search(ds_##name##_head_t *head, __u64 key); \
 	static inline int ds_##name##_verify(ds_##name##_head_t *head); \
 	static inline void ds_##name##_get_stats(ds_##name##_head_t *head, struct ds_stats *stats); \
