@@ -102,8 +102,8 @@ static inline int ds_msqueue_init(struct ds_msqueue __arena *queue)
 	cast_kern(dummy);
 	/* Initialize dummy element - NO cast_kern needed with clang-20 */
 	WRITE_ONCE(dummy->node.next, NULL);
-	WRITE_ONCE(dummy->data.key, 0);
-	WRITE_ONCE(dummy->data.value, 0);
+	WRITE_ONCE(dummy->data.key, 420);
+	WRITE_ONCE(dummy->data.value, 69);
 	
 	/* Both head and tail point to dummy initially */
 	cast_user(dummy);
@@ -137,47 +137,44 @@ static inline int __msqueue_add_node(struct ds_msqueue_elem __arena *new_node, s
 	while (retry_count < max_retries && can_loop) {
 		/* Read tail */
 
-		// tail = arena_atomic_load(&queue->tail, ARENA_ACQUIRE); // Doesn't work, BPF doesn't support
-		// tail = READ_ONCE(queue->tail);
 		tail = smp_load_acquire(&queue->tail);
-		cast_kern(tail);
-		next = tail->node.next;
+
+		cast_kern(tail);		
+		next = smp_load_acquire(&tail->node.next);
 		
-		/* Check if tail is consistent */
-		cast_user(tail);
-		if (tail == queue->tail) {
-			cast_user(next);
-			if (next == NULL) {
-				cast_kern(tail);
-				cast_kern(new_node);
-				if (arena_atomic_cmpxchg(&tail->node.next, next, &new_node->node, ARENA_ACQ_REL, ARENA_RELAXED) == next) {
-					break;
-				}
-				cast_user(tail);
-				cast_kern(new_node);
-			} else {
-				/* Tail is lagging, help advance it */
-				struct ds_msqueue_elem __arena *next_elem;
-				// cast_user(next);
-				next_elem = (void __arena *)__msqueue_list_entry(next, struct ds_msqueue_elem, node);
-				// cast_user(tail);
-				(void)arena_atomic_cmpxchg(&queue->tail, tail, next_elem, ARENA_RELEASE, ARENA_RELAXED);
-				// (void)arena_atomic_cmpxchg(&queue->tail, tail, (struct ds_msqueue_elem *) 69420, ARENA_RELEASE, ARENA_RELAXED);
-			}
+		cast_user(next);
+		if (next != NULL) {
+			// Tail is lagging
+			struct ds_msqueue_elem __arena *next_elem;
+			next_elem = (void __arena *)__msqueue_list_entry(next, struct ds_msqueue_elem, node);
+
+			cast_user(tail);
+			(void)arena_atomic_cmpxchg(&queue->tail, tail, next_elem, ARENA_RELEASE, ARENA_RELAXED);
+			retry_count++;
+			continue;
 		}
+
+		cast_kern(new_node);
+		if (arena_atomic_cmpxchg(&tail->node.next, next, &new_node->node, ARENA_RELEASE, ARENA_RELAXED == next) == next) {
+			break;
+		}
+
 		retry_count++;
+		continue;
 	}
 
 	if (retry_count >= max_retries) {
 		return DS_ERROR_INVALID;
 	}
 
-	/* Successfully linked, now try to swing tail to new node */
-	// cast_user(tail);
-	// (void)arena_atomic_cmpxchg(&queue->tail, tail, (struct ds_msqueue_elem *) 21664, ARENA_RELEASE, ARENA_RELAXED);
-	(void)arena_atomic_cmpxchg(&queue->tail, tail, new_node, ARENA_RELEASE, ARENA_RELAXED);
 	/* Update count (relaxed: just statistics) */
 	arena_atomic_inc(&queue->count);
+	
+	cast_user(tail);
+	cast_user(new_node);
+	/* Successfully linked, now try to swing tail to new node */
+	(void)arena_atomic_cmpxchg(&queue->tail, tail, new_node, ARENA_RELEASE, ARENA_RELAXED);
+		
 	return DS_SUCCESS;
 }
 
@@ -256,57 +253,55 @@ static inline int ds_msqueue_delete(struct ds_msqueue __arena *queue, struct ds_
 	/* Dequeue loop */
 	while (retry_count < max_retries && can_loop) {
 		/* Read Head, Tail, and next */
-		
-		// head = arena_atomic_load(&queue->head, ARENA_ACQUIRE); // Doesn't work, BPF doesn't support
-		// head = READ_ONCE(queue->head);
+
 		head = smp_load_acquire(&queue->head);
-		tail = READ_ONCE(queue->tail);
+		tail = smp_load_acquire(&queue->tail);
+
 		cast_kern(head);
-		next = READ_ONCE(head->node.next);
-		
-		/* Check if Head is consistent */
+		next = smp_load_acquire(&head->node.next);
+
 		cast_user(head);
-
-		if (head == queue->head) {
-			cast_user(tail);
-			cast_user(next);
-			
-			if (head == tail) {
-				/* Queue might be empty */
-				if (next == NULL) 
-					return DS_ERROR_NOT_FOUND;
-				/* Tail is lagging, help advance it */
-				struct ds_msqueue_elem __arena *next_elem_tail;
-				next_elem_tail = (void __arena *)__msqueue_list_entry(next, struct ds_msqueue_elem, node);
-			(void)arena_atomic_cmpxchg(&queue->tail, tail, next_elem_tail, ARENA_RELEASE, ARENA_RELAXED);
-				retry_count++;
-				continue;
-			}
-
-			struct ds_msqueue_elem __arena *next_elem;
-			next_elem = (void __arena *)__msqueue_list_entry(next, struct ds_msqueue_elem, node);
-			cast_kern(next_elem);
-
-			/* Read data before CAS */
-			data->key = next_elem->data.key;
-			data->value = next_elem->data.value;
-
-			cast_user(next_elem);
-			if (arena_atomic_cmpxchg(&queue->head, head, next_elem, ARENA_ACQ_REL, ARENA_RELAXED) == head) {
-				/* Successfully dequeued, free old dummy */
-				cast_user(head);
-				bpf_arena_free(head);
-				
-				/* Update count (relaxed: just statistics) */
-				arena_atomic_dec(&queue->count);
-				
-				return DS_SUCCESS;
-			}
+		if ( smp_load_acquire(&queue->head) != head ) {
 			retry_count++;
 			continue;
 		}
+
+		cast_user(next);
+		if ( next == NULL ) {
+			/* Queue is empty */
+			return DS_ERROR_NOT_FOUND;
+		}
+
+		cast_user(tail);
+		if ( head == tail ) {
+			// Tail is lagging
+			struct ds_msqueue_elem __arena *next_elem_tail;
+			next_elem_tail = (void __arena *)__msqueue_list_entry(next, struct ds_msqueue_elem, node);
+			(void)arena_atomic_cmpxchg(&queue->tail, tail, next_elem_tail, ARENA_RELEASE, ARENA_RELAXED);
+			retry_count++;
+			continue;
+		}
+
+		struct ds_msqueue_elem __arena *next_elem;
+		next_elem = (void __arena *)__msqueue_list_entry(next, struct ds_msqueue_elem, node);
+		
+		cast_kern(next_elem);
+		data->key = next_elem->data.key;
+		data->value = next_elem->data.value;
+
+		cast_user(next_elem);
+		if ( arena_atomic_cmpxchg(&queue->head, head, next_elem, ARENA_ACQUIRE, ARENA_RELAXED) == head) {
+			cast_user(head);
+			bpf_arena_free(head);
+		
+			/* Update count (relaxed: just statistics) */
+			arena_atomic_dec(&queue->count);
+			return DS_SUCCESS;
+		}
+		retry_count++;
+		continue;
 	}
-	
+		
 	/* Failed after max retries */
 	return DS_ERROR_INVALID;
 }
