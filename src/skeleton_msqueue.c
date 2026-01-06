@@ -92,12 +92,12 @@ static void poll_and_dequeue()
 		
 		result = ds_msqueue_pop(queue, &data);
 		
-		if (result > 0) {
+		if (result == DS_SUCCESS) {
 			/* Successfully dequeued an element */
 			printf("Dequeued element %llu: pid=%llu, ts=%llu\n", 
 			       dequeued_count, data.key, data.value);
 			dequeued_count++;
-		} else if (result == 0) {
+		} else if (result == DS_ERROR_NOT_FOUND) {
 			/* Queue is empty - this is normal, just continue polling */
 		} else {
 			/* Actual error (negative return value) */

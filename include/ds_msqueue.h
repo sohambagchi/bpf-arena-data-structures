@@ -175,6 +175,7 @@ static inline int __msqueue_add_node(struct ds_msqueue_elem __arena *new_node, s
 	/* Successfully linked, now try to swing tail to new node */
 	if (arena_atomic_cmpxchg(&queue->tail, tail, new_node, ARENA_RELEASE, ARENA_RELAXED) != tail) {
 		/* Failed to update tail, but it's okay - another thread will help */
+		return DS_SUCCESS;
 	}
 		
 	return DS_SUCCESS;
@@ -224,22 +225,20 @@ static inline int ds_msqueue_insert(struct ds_msqueue __arena *queue, __u64 key,
 }
 
 /**
- * ds_msqueue_delete - Dequeue an element from the head
+ * ds_msqueue_pop - Dequeue an element from the head
  * @queue: Pointer to queue structure
- * @key: Unused parameter (kept for API compatibility with ds_api.h)
+ * @data: Output buffer for dequeued key-value pair
  * 
  * Implements the lock-free dequeue algorithm from the Michael-Scott queue paper.
  * Attempts to swing the head pointer to head->next using compare-and-swap, effectively
  * removing the current dummy node. The old dummy is then freed, and what was head->next
  * becomes the new dummy. If tail is falling behind, helps advance it before retrying.
  * 
- * Note: The key parameter is unused; actual dequeued data is discarded in this implementation.
- * 
  * Returns: DS_SUCCESS if element successfully dequeued,
  *          DS_ERROR_INVALID if queue is NULL or operation fails after max retries,
  *          DS_ERROR_NOT_FOUND if queue is empty (head->next is NULL)
  */
-static inline int ds_msqueue_delete(struct ds_msqueue __arena *queue, struct ds_kv *data)
+static inline int ds_msqueue_pop(struct ds_msqueue __arena *queue, struct ds_kv *data)
 {
 	struct ds_msqueue_elem __arena *head;
 	struct ds_msqueue_elem __arena *tail;
@@ -306,33 +305,6 @@ static inline int ds_msqueue_delete(struct ds_msqueue __arena *queue, struct ds_
 		
 	/* Failed after max retries */
 	return DS_ERROR_INVALID;
-}
-
-/**
- * ds_msqueue_pop - Pop an element from the queue (wrapper for delete)
- * @queue: Pointer to queue structure
- * @data: Output parameter for dequeued key-value pair
- * 
- * This is a convenience wrapper around ds_msqueue_delete() that provides
- * more intuitive naming for FIFO pop operations. Unlike ds_msqueue_delete,
- * this function treats an empty queue (DS_ERROR_NOT_FOUND) as a normal
- * condition and returns 0, making it suitable for polling scenarios where
- * the queue may frequently be empty.
- * 
- * Returns: 1 if element successfully dequeued (data is valid),
- *          0 if queue is empty (data is unchanged),
- *          negative error code for actual errors (invalid parameters, etc.)
- */
-static inline int ds_msqueue_pop(struct ds_msqueue __arena *queue, struct ds_kv *data)
-{
-	int result = ds_msqueue_delete(queue, data);
-	
-	if (result == DS_SUCCESS)
-		return 1; /* Successfully dequeued */
-	else if (result == DS_ERROR_NOT_FOUND)
-		return 0; /* Empty queue - not an error */
-	else
-		return result; /* Actual error */
 }
 
 /**

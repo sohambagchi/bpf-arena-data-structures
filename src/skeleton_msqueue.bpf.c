@@ -94,8 +94,9 @@ static __always_inline int handle_operation(struct ds_operation *op)
 		break;
 		
 	case DS_OP_DELETE:
-		/* DS_API_INSERT: Call your delete function */
-		result = ds_msqueue_delete(ds_queue, &op->kv);
+	case DS_OP_POP:
+		/* DS_API_INSERT: Call your pop function */
+		result = ds_msqueue_pop(ds_queue, &op->kv);
 		break;
 		
 	case DS_OP_SEARCH:
