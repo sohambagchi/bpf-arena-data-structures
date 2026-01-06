@@ -7,6 +7,7 @@ import os
 import subprocess
 import multiprocessing
 import time
+import sys
 from pathlib import Path
 from typing import List
 
@@ -176,6 +177,13 @@ def main():
         return 1
     
     print(f"\nFound {len(executables)} executable(s)")
+    
+    if len(sys.argv) > 1:
+        # Filter executables based on command line arguments
+        filter_set = set(sys.argv[1:])
+        executables = [exe for exe in executables if exe in filter_set]
+        print(f"Filtered executables to run: {executables}")
+    
     print(f"CPU count: {multiprocessing.cpu_count()}")
     
     # Run each executable
