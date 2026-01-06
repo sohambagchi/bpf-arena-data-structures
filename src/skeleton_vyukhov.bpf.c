@@ -72,7 +72,7 @@ bool initialized = false;
  * 
  * DS_API_INSERT: Add cases for your data structure operations here
  * 
- * NOTE: Simplified design - kernel only does inserts via path_mkdir hook,
+ * NOTE: Simplified design - kernel only does inserts via inode_create hook,
  * userspace threads poll/search the data structure.
  */
 static __always_inline int handle_operation(struct ds_operation *op)
@@ -95,8 +95,9 @@ static __always_inline int handle_operation(struct ds_operation *op)
 		break;
 		
 	case DS_OP_DELETE:
-		/* DS_API_INSERT: Call your delete function */
-		result = ds_vyukhov_delete(ds_head, &op->kv);
+	case DS_OP_POP:
+		/* DS_API_INSERT: Call your pop function */
+		result = ds_vyukhov_pop(ds_head, &op->kv);
 		break;
 		
 	case DS_OP_SEARCH:

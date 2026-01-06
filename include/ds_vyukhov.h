@@ -204,7 +204,7 @@ static inline int ds_vyukhov_insert(struct ds_vyukhov_head __arena *head,
 }
 
 /**
- * ds_vyukhov_delete - Dequeue an element (delete/pop)
+ * ds_vyukhov_pop - Dequeue an element (delete/pop)
  * @head: Queue head
  * @data: Output parameter for dequeued key-value pair
  * 
@@ -217,7 +217,7 @@ static inline int ds_vyukhov_insert(struct ds_vyukhov_head __arena *head,
  *          DS_ERROR_NOT_FOUND if queue is empty
  *          DS_ERROR_BUSY if max retries exceeded
  */
-static inline int ds_vyukhov_delete(struct ds_vyukhov_head __arena *head, struct ds_kv *data)
+static inline int ds_vyukhov_pop(struct ds_vyukhov_head __arena *head, struct ds_kv *data)
 {
 	struct ds_vyukhov_node __arena *cell;
 	__u64 pos;
@@ -271,21 +271,6 @@ static inline int ds_vyukhov_delete(struct ds_vyukhov_head __arena *head, struct
 	
 	/* Max retries exceeded */
 	return DS_ERROR_BUSY;
-}
-
-/**
- * ds_vyukhov_pop - Pop an element from the queue (wrapper for delete)
- * @head: Queue head
- * @data: Output parameter for dequeued key-value pair
- * 
- * This is a convenience wrapper around ds_vyukhov_delete() that provides
- * more intuitive naming for FIFO pop operations.
- * 
- * Returns: DS_SUCCESS on success, error code otherwise
- */
-static inline int ds_vyukhov_pop(struct ds_vyukhov_head __arena *head, struct ds_kv *data)
-{
-	return ds_vyukhov_delete(head, data);
 }
 
 /**
