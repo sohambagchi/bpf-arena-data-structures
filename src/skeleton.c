@@ -2,7 +2,7 @@
 /* Skeleton Userspace Program for BPF Arena Data Structure Testing
  * 
  * SIMPLIFIED DESIGN:
- * - Kernel: LSM hook on inode_create inserts items (triggers on execve)
+ * - Kernel: LSM hook on inode_create inserts items (triggers on file creation)
  * - Userspace: Single thread sleeps, then reads the data structure
  * 
  * USAGE:

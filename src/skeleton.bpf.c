@@ -74,7 +74,7 @@ bool initialized = false;
  * 
  * DS_API_INSERT: Add cases for your data structure operations here
  * 
- * NOTE: Simplified design - kernel only does inserts via path_mkdir hook,
+ * NOTE: Simplified design - kernel only does inserts via inode_create hook,
  * userspace threads poll/search the data structure.
  */
 static __always_inline int handle_operation(struct ds_operation *op)
