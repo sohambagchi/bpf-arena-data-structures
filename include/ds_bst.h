@@ -209,8 +209,8 @@ static inline int ds_bst_init(struct ds_bst_head __arena *head)
 	head->root->base.is_leaf = 0;
 	head->root->base.infinite_key = 2;
 	head->root->routing_key.key = ~0ULL;   /* ∞₂ */
-	head->root->left = (struct bst_tree_node __arena *)head->leaf_inf1;
-	head->root->right = (struct bst_tree_node __arena *)head->leaf_inf2;
+	WRITE_ONCE(head->root->left, (struct bst_tree_node __arena *)head->leaf_inf1);
+	smp_store_release(&head->root->right, (struct bst_tree_node __arena *)head->leaf_inf2);
 	
 	return DS_SUCCESS;
 }
