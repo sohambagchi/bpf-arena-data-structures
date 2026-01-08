@@ -17,6 +17,53 @@ struct ctx {
 	uint64_t expected;
 };
 
+static void dump_final_kvs(struct ds_bst_head *head)
+{
+	struct ds_bst_internal *stack[BST_MAX_DEPTH];
+	int stack_top = 0;
+	int iterations = 0;
+
+	if (!head || !head->root)
+		return;
+
+	stack[stack_top++] = head->root;
+
+	while (stack_top > 0 && iterations < BST_MAX_DEPTH * 8) {
+		struct ds_bst_internal *node = stack[--stack_top];
+		struct ds_bst_tree_node *left_h, *right_h;
+
+		if (!node)
+			continue;
+
+		left_h = (struct ds_bst_tree_node *)node->pLeft;
+		right_h = (struct ds_bst_tree_node *)node->pRight;
+		if (!left_h || !right_h)
+			return;
+
+		if (left_h->type == BST_NODE_LEAF) {
+			struct ds_bst_leaf *leaf = (struct ds_bst_leaf *)left_h;
+			if (leaf->kv.key < BST_SENTINEL_KEY1) {
+				fprintf(stdout, "consumer-final: key=%" PRIu64 " value=%" PRIu64 "\n",
+					(uint64_t)leaf->kv.key, (uint64_t)leaf->kv.value);
+			}
+		} else if (stack_top < BST_MAX_DEPTH - 1) {
+			stack[stack_top++] = (struct ds_bst_internal *)left_h;
+		}
+
+		if (right_h->type == BST_NODE_LEAF) {
+			struct ds_bst_leaf *leaf = (struct ds_bst_leaf *)right_h;
+			if (leaf->kv.key < BST_SENTINEL_KEY1) {
+				fprintf(stdout, "consumer-final: key=%" PRIu64 " value=%" PRIu64 "\n",
+					(uint64_t)leaf->kv.key, (uint64_t)leaf->kv.value);
+			}
+		} else if (stack_top < BST_MAX_DEPTH - 1) {
+			stack[stack_top++] = (struct ds_bst_internal *)right_h;
+		}
+
+		iterations++;
+	}
+}
+
 struct prod_arg {
 	struct ctx *c;
 	int tid;
@@ -121,6 +168,8 @@ int main(void)
 	for (int i = 0; i < USERTEST_NUM_PRODUCERS; i++)
 		pthread_join(producers[i], NULL);
 	pthread_join(consumer, NULL);
+
+	dump_final_kvs(&c.tree);
 
 	int vrc = ds_bintree_verify(&c.tree);
 	if (vrc != DS_SUCCESS) {
