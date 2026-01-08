@@ -86,8 +86,11 @@ ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
 # APPLICATION LIST
 # ============================================================================
 # List of all applications to build
-# Add your new programs here!
-APPS = skeleton skeleton_msqueue skeleton_vyukhov skeleton_mpsc skeleton_bintree skeleton_bst skeleton_folly_spsc
+# - BPF_APPS: BPF-backed (need skeleton generation + libbpf)
+# - USERTEST_APPS: pure userspace pthread tests (no BPF, no CLI args)
+BPF_APPS = skeleton skeleton_msqueue skeleton_vyukhov skeleton_mpsc skeleton_bintree skeleton_bst skeleton_folly_spsc
+USERTEST_APPS = usertest_list usertest_msqueue usertest_mpsc usertest_vyukhov usertest_folly_spsc usertest_bst usertest_bintree
+APPS = $(BPF_APPS) $(USERTEST_APPS)
 
 # ============================================================================
 # CLANG BPF SYSTEM INCLUDES
@@ -215,9 +218,14 @@ $(OUTPUT)/%.skel.h: $(OUTPUT)/%.bpf.o | $(OUTPUT) $(BPFTOOL)
 
 # Compile userspace .c files to object files
 # These depend on the skeleton header being generated first
-$(patsubst %,$(OUTPUT)/%.o,$(APPS)): %.o: %.skel.h
+$(patsubst %,$(OUTPUT)/%.o,$(BPF_APPS)): %.o: %.skel.h
 
 $(OUTPUT)/%.o: src/%.c $(wildcard include/*.h) | $(OUTPUT)
+	$(call msg,CC,$@)
+	$(Q)$(CC) $(CFLAGS) $(INCLUDES) -c $(filter %.c,$^) -o $@
+
+# Userspace-only test runners (no libbpf / no skeleton headers)
+$(OUTPUT)/%.o: usertest/%.c $(wildcard include/*.h) usertest/usertest_common.h | $(OUTPUT)
 	$(call msg,CC,$@)
 	$(Q)$(CC) $(CFLAGS) $(INCLUDES) -c $(filter %.c,$^) -o $@
 
@@ -231,9 +239,19 @@ $(OUTPUT)/%.o: src/%.c $(wildcard include/*.h) | $(OUTPUT)
 # - libbpf (BPF program loading/management)
 # - libelf (ELF file parsing)
 # - libz (compression, used by libbpf)
-$(APPS): %: $(OUTPUT)/%.o $(LIBBPF_OBJ) | $(OUTPUT)
+$(BPF_APPS): %: $(OUTPUT)/%.o $(LIBBPF_OBJ) | $(OUTPUT)
 	$(call msg,BINARY,$@)
 	$(Q)$(CC) $(CFLAGS) $^ $(ALL_LDFLAGS) -lelf -lz -lpthread -o $@
+
+$(USERTEST_APPS): %: $(OUTPUT)/%.o | $(OUTPUT)
+	$(call msg,BINARY,$@)
+	$(Q)$(CC) $(CFLAGS) $^ $(ALL_LDFLAGS) -lpthread -o $@
+
+.PHONY: usertest
+usertest: $(USERTEST_APPS)
+	@echo ""
+	@echo "Built userspace-only test runners:"
+	@for app in $(USERTEST_APPS); do echo "  - $$app"; done
 
 # ============================================================================
 # TESTING TARGETS
