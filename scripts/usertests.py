@@ -155,7 +155,8 @@ def main(argv: list[str]) -> int:
 	parser.add_argument("--build", action="store_true", help="Run `make usertest` before executing")
 	parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SEC, help="Per-test timeout seconds")
 	parser.add_argument("--keep-going", action="store_true", help="Continue running remaining tests after a failure")
-	parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+	parser.add_argument("--quiet", action="store_true", help="Suppress test program output (only print pass/fail)")
+	parser.add_argument("-v", "--verbose", action="store_true", help="Verbose runner output (prints commands, extra details)")
 	args = parser.parse_args(argv)
 
 	apps = [normalize_app(a) for a in (args.apps or default_apps())]
@@ -182,6 +183,12 @@ def main(argv: list[str]) -> int:
 				break
 			continue
 
+		if not args.quiet:
+			sys.stdout.write(f"\n===== {app} (rc={rc}) =====\n")
+			sys.stdout.write(out)
+			if not out.endswith("\n"):
+				sys.stdout.write("\n")
+
 		parsed = parse_output(out)
 
 		ok = True
@@ -207,15 +214,11 @@ def main(argv: list[str]) -> int:
 
 		if not ok:
 			failures.append(app)
-			sys.stdout.write(f"\n[{app}] FAILED (rc={rc})\n")
-			sys.stdout.write(out)
-			sys.stdout.write("\n")
+			sys.stdout.write(f"[{app}] FAILED (rc={rc})\n")
 			if not args.keep_going:
 				break
 		else:
 			sys.stdout.write(f"[{app}] ok\n")
-			if args.verbose:
-				sys.stdout.write(out)
 
 	if failures:
 		sys.stderr.write("\nFailures:\n")
@@ -228,4 +231,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
 	raise SystemExit(main(sys.argv[1:]))
-
