@@ -15,6 +15,11 @@ Key requirements:
 - Implement verify() to check structural integrity
 - Use can_loop in all loops
 - Memory via bpf_arena_alloc()/bpf_arena_free()
+- Use smp_store_release and smp_load_acquire for releases and acquires
+- Use WRITE_ONCE/READ_ONCE for relaxed accesses
+- Update scripts/runner.py to add your new skeleton app for testing
+- Run tests using `sudo python3 scripts/runner.py skeleton_[name]`
+- Do not run the implementation with `&`, that interferes with the password output
 
 See GUIDE.md for details. Ask questions if the specification is unclear.
 ```
@@ -152,7 +157,8 @@ Every data structure MUST implement:
 - `arena_atomic_exchange(ptr, val, mo)` - Atomic exchange
 - `arena_atomic_add(ptr, val, mo)` - Atomic fetch-and-add
 - `arena_atomic_sub(ptr, val, mo)` - Atomic fetch-and-subtract
-- `arena_atomic_load(ptr, mo)` / `arena_atomic_store(ptr, val, mo)` - Explicit atomic access
+- `smp_store_release(ptr, val)` - Release store
+- `smp_load_acquire(ptr)` - Acquire load
 - Convenience: `arena_atomic_inc(ptr)`, `arena_atomic_dec(ptr)` - Relaxed increment/decrement
 - `WRITE_ONCE() / READ_ONCE()` - Volatile access (alternative to atomic load/store)
 
@@ -199,8 +205,7 @@ Your document should contain these sections:
 
 struct ds_<name>_node {
     struct ds_<name>_node __arena *next;  // Arena pointer
-    __u64 key;
-    __u64 value;
+    struct ds_kv data;
 };
 
 struct ds_<name>_head {

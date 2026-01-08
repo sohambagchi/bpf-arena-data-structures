@@ -126,7 +126,7 @@ static inline int ds_mpsc_insert(struct ds_mpsc_head __arena *ctx,
     // 4. Link the old back to the new node
     // RELEASE store ensures link is visible to consumer
     // Note: If producer is preempted here, consumer sees prev->next == NULL
-    arena_atomic_store(&prev->next, n, ARENA_RELEASE);
+    smp_store_release(&prev->next, n);
 
     arena_atomic_add(&ctx->count, 1, ARENA_RELAXED);
     return DS_SUCCESS;
@@ -165,7 +165,7 @@ static inline int ds_mpsc_delete(struct ds_mpsc_head __arena *ctx,
     
     // ACQUIRE load to see producer's link (prev->next = n)
     struct ds_mpsc_node __arena *next = 
-        arena_atomic_load(&tail->next, ARENA_ACQUIRE);
+        smp_load_acquire(&tail->next);
 
     // Case 1: Queue is logically empty
     if (tail == ctx->head) {
@@ -227,7 +227,7 @@ static inline int ds_mpsc_search(struct ds_mpsc_head __arena *ctx, __u64 key) {
             return DS_SUCCESS;
         }
         
-        curr = arena_atomic_load(&curr->next, ARENA_ACQUIRE);
+        curr = smp_load_acquire(&curr->next);
     }
     return DS_ERROR_NOT_FOUND;
 }
@@ -292,7 +292,7 @@ static inline int ds_mpsc_verify(struct ds_mpsc_head __arena *ctx) {
         }
 
         // ACQUIRE load to follow the linked list safely
-        curr = arena_atomic_load(&curr->next, ARENA_ACQUIRE);
+        curr = smp_load_acquire(&curr->next);
         
         // If we hit NULL before head->head, the list might be broken
         // UNLESS we hit the "stalled producer" gap.

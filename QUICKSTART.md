@@ -80,10 +80,11 @@ sudo ./skeleton_msqueue
 sudo ./skeleton_msqueue -v
 
 # Test other data structures
-sudo ./skeleton_bst        # Binary Search Tree
-sudo ./skeleton_bintree    # Ellen's Binary Tree
-sudo ./skeleton_mpsc       # MPSC Queue
-sudo ./skeleton_vyukhov    # Vyukhov MPSC Queue
+sudo ./skeleton_bst          # Binary Search Tree
+sudo ./skeleton_bintree      # Ellen's Binary Tree
+sudo ./skeleton_mpsc         # MPSC Queue
+sudo ./skeleton_vyukhov      # Vyukhov MPSC Queue
+sudo ./skeleton_folly_spsc   # Folly SPSC Queue
 ```
 
 ## Understanding the Output

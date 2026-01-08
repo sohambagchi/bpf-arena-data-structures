@@ -62,6 +62,7 @@ The framework currently includes the following data structure implementations:
 | **Ellen's Binary Tree** | `ds_bintree.h` | `skeleton_bintree` | Lock-free binary search tree. |
 | **MPSC Queue** | `ds_mpsc.h` | `skeleton_mpsc` | Multi-producer single-consumer queue. |
 | **Vyukhov MPSC Queue** | `ds_vyukhov.h` | `skeleton_vyukhov` | Optimized MPSC queue by Dmitry Vyukhov. |
+| **Folly SPSC Queue** | `ds_folly_spsc.h` | `skeleton_folly_spsc` | Single-producer single-consumer ring buffer queue (Folly implementation). |
 
 ## Overview
 
@@ -133,19 +134,93 @@ The project relies on `BPF_MAP_TYPE_ARENA` as the backing store. This map type a
 
 To ensure correctness in concurrent environments, we use the `arena_atomic_*` API defined in `include/libarena_ds.h`. These macros wrap GCC's `__atomic` built-ins and are compatible with BPF arena pointers.
 
-Key primitives include:
-- `arena_atomic_cmpxchg(ptr, old, new, success_mo, failure_mo)`
-- `arena_atomic_exchange(ptr, val, mo)`
-- `arena_atomic_add(ptr, val, mo)`
-- `arena_atomic_load(ptr, mo)`
-- `arena_atomic_store(ptr, val, mo)`
+**Key atomic primitives:**
+- `arena_atomic_cmpxchg(ptr, old, new, success_mo, failure_mo)` - Compare-and-swap operation
+- `arena_atomic_exchange(ptr, val, mo)` - Atomic swap
+- `arena_atomic_add(ptr, val, mo)` - Fetch-and-add
+- `arena_atomic_sub(ptr, val, mo)` - Fetch-and-subtract
+- `arena_atomic_and(ptr, val, mo)` - Fetch-and-AND
+- `arena_atomic_or(ptr, val, mo)` - Fetch-and-OR
 
-Supported memory orderings:
-- `ARENA_RELAXED`
-- `ARENA_ACQUIRE`
-- `ARENA_RELEASE`
-- `ARENA_ACQ_REL`
-- `ARENA_SEQ_CST`
+**⚠️ IMPORTANT: Do NOT use `arena_atomic_load()` or `arena_atomic_store()`**
+
+These primitives trigger BPF verifier issues. Instead, use the alternatives below based on the memory ordering you need.
+
+**Convenience wrappers:**
+- `arena_atomic_inc(ptr)` - Increment (RELAXED)
+- `arena_atomic_dec(ptr)` - Decrement (RELAXED)
+- `arena_memory_barrier()` - Full memory fence
+
+**Compiler barriers for acquire/release semantics (use these instead of arena_atomic_load/store):**
+- `smp_load_acquire(ptr)` - Load with acquire semantics (use for ACQUIRE ordering)
+- `smp_store_release(ptr, val)` - Store with release semantics (use for RELEASE ordering)
+- `READ_ONCE(x)` - Volatile read, prevents compiler reordering (use for RELAXED loads)
+- `WRITE_ONCE(x, val)` - Volatile write, prevents compiler reordering (use for RELAXED stores)
+
+**Memory ordering mapping:**
+- Need ACQUIRE load? → Use `smp_load_acquire(ptr)`
+- Need RELEASE store? → Use `smp_store_release(ptr, val)`
+- Need RELAXED load? → Use `READ_ONCE(var)`
+- Need RELAXED store? → Use `WRITE_ONCE(var, val)`
+- Need SEQ_CST? → Use `arena_memory_barrier()` with READ_ONCE/WRITE_ONCE
+
+**Supported memory orderings:**
+- `ARENA_RELAXED` - No synchronization or ordering constraints
+- `ARENA_ACQUIRE` - Load-acquire (prevents subsequent loads/stores from moving before this operation)
+- `ARENA_RELEASE` - Store-release (prevents prior loads/stores from moving after this operation)
+- `ARENA_ACQ_REL` - Both acquire and release semantics
+- `ARENA_SEQ_CST` - Sequentially consistent (strongest guarantee)
+
+**Usage examples:**
+```c
+// Lock-free insertion with CAS
+retry:
+    old_head = READ_ONCE(head->first);  // RELAXED load
+    new_node->next = old_head;
+    if (arena_atomic_cmpxchg(&head->first, old_head, new_node, 
+                             ARENA_ACQ_REL, ARENA_ACQUIRE) != old_head)
+        goto retry;
+
+// Producer-consumer synchronization (SPSC queue)
+// Producer: write data then release the write index
+node->key = key;
+node->value = value;
+smp_store_release(&head->write_idx, next_idx);  // RELEASE store
+
+// Consumer: acquire the write index then read data
+current_write = smp_load_acquire(&head->write_idx);  // ACQUIRE load
+if (current_read != current_write) {
+    data = node->value;  // Safe to read
+}
+
+// Linked list traversal
+current = smp_load_acquire(&node->next);  // ACQUIRE load to see updates
+
+// Initialize node
+WRITE_ONCE(node->value, initial_val);  // RELAXED store
+```
+
+### Algorithm-Specific Memory Ordering Patterns
+
+Different concurrent data structures require different synchronization patterns:
+
+#### Lock-Free Trees (Ellen's Binary Tree)
+- **CAS on internal node update fields**: `ARENA_ACQ_REL` / `ARENA_ACQUIRE`
+- **Child pointer updates**: `ARENA_RELEASE` to publish, `ARENA_ACQUIRE` to read
+- **Helping protocol**: Operations may complete work started by others
+- **Tagged pointers**: Low bits encode operation state (CLEAN, IFLAG, DFLAG, MARK)
+
+#### SPSC Queues (Folly Implementation)
+- **Producer writes data → RELEASE write index**: Ensures data is visible before index
+- **Consumer ACQUIRE write index → reads data**: Ensures index update is visible first
+- **Consumer reads data → RELEASE read index**: Signals slot is free
+- **Producer ACQUIRE read index → checks space**: Sees consumer's completion
+- **Key insight**: Single producer/consumer eliminates need for CAS operations
+
+#### MPSC Queues (Multi-Producer Single-Consumer)
+- **Multiple producers use CAS**: `arena_atomic_cmpxchg` for head updates
+- **Consumer uses relaxed reads**: No contention on dequeue path
+- **Memory barriers**: Separate cache lines prevent false sharing
 
 ### The Pipeline: `inode_create` -> Polling
 

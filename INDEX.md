@@ -83,6 +83,11 @@
   - Optimized MPSC queue by Dmitry Vyukhov
   - ~350 lines
 
+- **`include/ds_folly_spsc.h`** - Folly SPSC Queue
+  - Single-producer single-consumer ring buffer queue
+  - Based on Folly's implementation with smp_load_acquire/smp_store_release
+  - ~400 lines
+
 ### Test Framework
 - **`src/skeleton.bpf.c`** - Kernel-side BPF program (list)
   - Arena map definition
@@ -115,6 +120,8 @@
 - **`src/skeleton_mpsc.c`** - Userspace test driver (MPSC)
 - **`src/skeleton_vyukhov.bpf.c`** - Kernel-side BPF program (Vyukhov)
 - **`src/skeleton_vyukhov.c`** - Userspace test driver (Vyukhov)
+- **`src/skeleton_folly_spsc.bpf.c`** - Kernel-side BPF program (Folly SPSC)
+- **`src/skeleton_folly_spsc.c`** - Userspace test driver (Folly SPSC)
 
 ### Build System
 - **`Makefile`** - Build system

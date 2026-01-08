@@ -44,12 +44,15 @@ cat docs/GUIDE.md
 - **`skeleton_mpsc.c`** - Userspace reader for MPSC Queue
 - **`skeleton_vyukhov.bpf.c`** - Kernel-side BPF program for Vyukhov MPSC Queue
 - **`skeleton_vyukhov.c`** - Userspace reader for Vyukhov MPSC Queue
+- **`skeleton_folly_spsc.bpf.c`** - Kernel-side BPF program for Folly SPSC Queue
+- **`skeleton_folly_spsc.c`** - Userspace reader for Folly SPSC Queue
 - **`ds_list.h`** - Reference implementation (doubly-linked list)
 - **`ds_msqueue.h`** - Michael-Scott lock-free queue implementation
 - **`ds_bst.h`** - Binary Search Tree implementation
 - **`ds_bintree.h`** - Ellen's Binary Tree implementation
 - **`ds_mpsc.h`** - MPSC Queue implementation
 - **`ds_vyukhov.h`** - Vyukhov MPSC Queue implementation
+- **`ds_folly_spsc.h`** - Folly SPSC Queue implementation
 
 ### Testing Infrastructure
 
