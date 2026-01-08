@@ -2,3 +2,4 @@
 bpf_arena/
 ./skeleton*
 *.tmp
+AGENT.md

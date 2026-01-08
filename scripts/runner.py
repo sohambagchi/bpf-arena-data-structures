@@ -14,7 +14,7 @@ from typing import List
 
 def find_executables() -> List[str]:
     """Find compiled executables in current directory."""
-    candidates = ['skeleton', 'skeleton_msqueue', 'skeleton_vyukhov', 'skeleton_mpsc', 'skeleton_bst']
+    candidates = ['skeleton', 'skeleton_msqueue', 'skeleton_vyukhov', 'skeleton_mpsc', 'skeleton_bst', 'skeleton_folly_spsc', 'skeleton_bintree']
     executables = []
     
     for exe in candidates:
@@ -42,8 +42,8 @@ def touch_file_worker(file_id: int, core_id: int, ready_event, start_event, stop
     count = 0
     while not stop_event.is_set():
         try:
-            # Create new file (triggers inode_create)
-            Path(filename).touch()
+            # Create new file (triggers inode_create) via subprocess (fork/exec)
+            subprocess.call(['touch', filename])
             count += 1
             # Small sleep to avoid overwhelming the system
             time.sleep(0.01)
