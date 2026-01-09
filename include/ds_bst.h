@@ -144,8 +144,7 @@ static inline void bst_search(
 	
 	/* Fill result structure */
 	struct bst_leaf_node __arena *leaf = (struct bst_leaf_node __arena *)node;
-	if (leaf)
-		cast_kern(leaf);
+	cast_kern(leaf);
 	
 	result->grandparent = grandparent;
 	result->parent = parent;
@@ -450,9 +449,9 @@ static inline int ds_bst_pop(struct ds_bst_head __arena *head, struct ds_kv *dat
 	
 	/* Find leftmost non-sentinel leaf */
 	struct bst_tree_node __arena *node;
-	struct bst_internal_node __arena *parent = NULL;
-	struct bst_internal_node __arena *grandparent = NULL;
-	__u8 parent_is_right = 0;
+	// struct bst_internal_node __arena *parent = NULL;
+	// struct bst_internal_node __arena *grandparent = NULL;
+	// __u8 parent_is_right = 0;
 	__u64 iterations = 0;
 	
 	node = (struct bst_tree_node __arena *)head->root;
@@ -468,9 +467,9 @@ static inline int ds_bst_pop(struct ds_bst_head __arena *head, struct ds_kv *dat
 		struct bst_internal_node __arena *internal = 
 			(struct bst_internal_node __arena *)node;
 		
-		grandparent = parent;
-		parent_is_right = 0;  /* Always going left */
-		parent = internal;
+		// grandparent = parent;
+		// parent_is_right = 0;  /* Always going left */
+		// parent = internal;
 		node = smp_load_acquire(&internal->left);
 		
 		iterations++;
