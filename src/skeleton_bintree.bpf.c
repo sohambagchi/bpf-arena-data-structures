@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Skeleton BPF Program for Non-Blocking Binary Search Tree Testing
  * 
- * This program tests the Ellen et al. (2010) non-blocking BST implementation
+ * This program tests the Ellen et al. (2010) non-blocking BINTREE implementation
  * where operations can be triggered from both kernel space (via LSM hooks)
  * and userspace (via direct arena access).
  * 
@@ -47,8 +47,8 @@ struct {
 int config_key_range = 1000;
 
 /* DS_API_INSERT: Declare your data structure head here */
-struct ds_bst_head __arena *ds_head;
-struct ds_bst_head __arena global_ds_head;
+struct ds_bintree_head __arena *ds_head;
+struct ds_bintree_head __arena global_ds_head;
 
 /* Statistics and control */
 __u64 total_kernel_ops = 0;

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Skeleton Userspace Program for BPF Arena Non-Blocking BST Testing
+/* Skeleton Userspace Program for BPF Arena Non-Blocking BINTREE Testing
  * 
  * SIMPLIFIED DESIGN:
  * - Kernel: LSM hook on inode_create inserts items (triggers on file creation)
@@ -68,7 +68,7 @@ static __u64 found_count = 0;
  */
 static void search_for_pids()
 {
-	struct ds_bst_head *head = skel->bss->ds_head;
+	struct ds_bintree_head *head = skel->bss->ds_head;
 	int result;
 	__u64 test_keys[] = {1, 100, 1000, 9999, 12345};
 	int num_keys = sizeof(test_keys) / sizeof(test_keys[0]);
@@ -129,7 +129,7 @@ static void search_for_pids()
  */
 static void traverse_and_print_tree(void)
 {
-	struct ds_bst_head *head = skel->bss->ds_head;
+	struct ds_bintree_head *head = skel->bss->ds_head;
 	
 	if (!head || !head->root) {
 		printf("Tree not initialized or empty\n");
@@ -143,7 +143,7 @@ static void traverse_and_print_tree(void)
 	
 	/* Allocate stack for iterative traversal (generous size) */
 	#define MAX_STACK_SIZE 4096
-	struct ds_bst_tree_node **stack = malloc(sizeof(void *) * MAX_STACK_SIZE);
+	struct ds_bintree_tree_node **stack = malloc(sizeof(void *) * MAX_STACK_SIZE);
 	if (!stack) {
 		fprintf(stderr, "Failed to allocate stack for traversal\n");
 		return;
@@ -153,14 +153,14 @@ static void traverse_and_print_tree(void)
 	__u64 leaf_count = 0;
 	
 	/* Push root to start */
-	stack[stack_top++] = (struct ds_bst_tree_node *)head->root;
+	stack[stack_top++] = (struct ds_bintree_tree_node *)head->root;
 	
 	/* Iterative in-order traversal */
 	while (stack_top > 0) {
-		struct ds_bst_tree_node *node = stack[--stack_top];
+		struct ds_bintree_tree_node *node = stack[--stack_top];
 		
-		if (bst_is_internal(node)) {
-			struct ds_bst_internal *internal = (struct ds_bst_internal *)node;
+		if (bintree_is_internal(node)) {
+			struct ds_bintree_internal *internal = (struct ds_bintree_internal *)node;
 			
 			/* Push right first (so left is processed first) */
 			if (internal->pRight)
@@ -169,8 +169,8 @@ static void traverse_and_print_tree(void)
 				stack[stack_top++] = internal->pLeft;
 		} else {
 			/* Leaf node - print if not sentinel */
-			struct ds_bst_leaf *leaf = (struct ds_bst_leaf *)node;
-			if (leaf->kv.key < BST_SENTINEL_KEY1) {
+			struct ds_bintree_leaf *leaf = (struct ds_bintree_leaf *)node;
+			if (leaf->kv.key < BINTREE_SENTINEL_KEY1) {
 				printf("  Key: %-20llu Value: %llu\n", 
 				       leaf->kv.key, leaf->kv.value);
 				leaf_count++;
@@ -208,7 +208,7 @@ static void traverse_and_print_tree(void)
  */
 static int verify_data_structure(void)
 {
-	struct ds_bst_head *head = skel->bss->ds_head;
+	struct ds_bintree_head *head = skel->bss->ds_head;
 	
 	printf("Verifying data structure from userspace...\n");
 	
@@ -244,7 +244,7 @@ static void print_statistics(void)
 	
 	/* Data structure statistics */
 	printf("\nData Structure State:\n");
-	struct ds_bst_head *head = skel->bss->ds_head;
+	struct ds_bintree_head *head = skel->bss->ds_head;
 	if (head) {
 		printf("  Elements in tree: %llu\n", head->count);
 	} else {
