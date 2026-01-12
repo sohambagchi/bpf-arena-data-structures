@@ -138,7 +138,6 @@ struct ds_bintree_dinfo {
 	struct ds_bintree_leaf __arena *pLeaf;
 	__u64 pUpdateParent; // previous update descriptor
 	bool bDisposeLeaf;
-	bool bRightParent;
 	bool bRightLeaf;
 };
 
@@ -280,7 +279,6 @@ struct bintree_search_result {
 	__u64 updParent;
 	__u64 updGrandParent;
 	bool bRightLeaf;
-	bool bRightParent;
 };
 
 /* ========================================================================
@@ -319,7 +317,6 @@ static __always_inline bool bintree_search(struct ds_bintree_head __arena *head,
 	struct ds_bintree_update_desc __arena *updGrandParent;
 
 	bool bRightLeaf;
-	bool bRightParent = false;
 
 	int iterations = 0;
 
@@ -338,7 +335,6 @@ static __always_inline bool bintree_search(struct ds_bintree_head __arena *head,
 	while (bintree_is_internal(pLeaf) && iterations < BINTREE_MAX_DEPTH && can_loop) {
 		pGrandParent = pParent;
 		pParent = (struct ds_bintree_internal __arena *) pLeaf;
-		bRightParent = bRightLeaf;
 		updGrandParent = updParent;
 		
 		cast_kern(pParent);
@@ -373,7 +369,6 @@ static __always_inline bool bintree_search(struct ds_bintree_head __arena *head,
 	res->updParent = (__u64)updParent;
 	res->updGrandParent = (__u64)updGrandParent;
 	res->bRightLeaf = bRightLeaf;
-	res->bRightParent = bRightParent;
 
 	return nCmp;
 }
@@ -863,7 +858,7 @@ static inline int ds_bintree_delete(struct ds_bintree_head __arena *head, struct
 		dinfo->pLeaf = res.pLeaf;
 		dinfo->bDisposeLeaf = true;
 		dinfo->pUpdateParent = bintree_get_ptr(res.updParent);
-		dinfo->bRightParent = res.bRightParent;
+		// dinfo->bRightParent = res.bRightParent;
 		dinfo->bRightLeaf = res.bRightLeaf;
 		
 		/* Link to update descriptor */
