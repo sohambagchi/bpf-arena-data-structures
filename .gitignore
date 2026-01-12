@@ -1,5 +1,6 @@
 .output/
 bpf_arena/
+build/
 ./skeleton*
 *.tmp
 AGENT.md

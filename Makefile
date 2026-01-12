@@ -21,15 +21,19 @@
 # All build artifacts go here to keep the source tree clean
 OUTPUT := .output
 
+# Directory for final binaries (user-facing build artifacts)
+OUT_DIR ?= build
+
 # ============================================================================
 # TOOLCHAIN CONFIGURATION
 # ============================================================================
 # Compiler for BPF programs (must support BPF target)
-# Use clang-20 for full BPF arena support
+# Recommend Clang 15+ for BPF arena support (clang-20 recommended if available)
 CLANG ?= clang-20
 
 # Compiler for userspace programs
 CC ?= gcc
+OBJDUMP ?= objdump
 
 # ============================================================================
 # DEPENDENCY PATHS
@@ -92,6 +96,9 @@ BPF_APPS = skeleton skeleton_msqueue skeleton_vyukhov skeleton_mpsc skeleton_bin
 USERTEST_APPS = usertest_list usertest_msqueue usertest_mpsc usertest_vyukhov usertest_folly_spsc usertest_bst usertest_bintree
 APPS = $(BPF_APPS) $(USERTEST_APPS)
 
+# Final binaries (placed in OUT_DIR)
+BINARIES := $(patsubst %,$(OUT_DIR)/%,$(APPS))
+
 # ============================================================================
 # CLANG BPF SYSTEM INCLUDES
 # ============================================================================
@@ -134,23 +141,25 @@ $(call allow-override,LD,$(CROSS_COMPILE)ld)
 # MAIN TARGETS
 # ============================================================================
 
+
 .PHONY: all
-all: $(APPS)
+all: $(BINARIES)
 	@echo ""
 	@echo "Build complete! Built applications:"
-	@for app in $(APPS); do echo "  - $$app"; done
+	@for app in $(BINARIES); do echo "  - $$app"; done
 	@echo ""
-	@echo "Run tests with:"
-	@echo "  sudo ./skeleton -d 5"
-	@echo "  sudo ./skeleton_msqueue -d 5"
+	@echo "Run tests (binaries are placed in $(OUT_DIR)):" 
+	@echo "  sudo $(OUT_DIR)/skeleton -d 5            # run skeleton test (5s)"
+	@echo "  sudo $(OUT_DIR)/skeleton_msqueue -d 5    # run msqueue test (5s)"
+	@echo "  Use -v to enable verification on exit: sudo $(OUT_DIR)/skeleton -v"
 
 .PHONY: clean
 clean:
 	$(call msg,CLEAN)
-	$(Q)rm -rf $(OUTPUT) $(APPS)
+	$(Q)rm -rf $(OUTPUT) $(OUT_DIR)
 
 # Create output directories
-$(OUTPUT) $(OUTPUT)/libbpf $(BPFTOOL_OUTPUT):
+$(OUTPUT) $(OUTPUT)/libbpf $(BPFTOOL_OUTPUT) $(OUT_DIR):
 	$(call msg,MKDIR,$@)
 	$(Q)mkdir -p $@
 
@@ -239,58 +248,70 @@ $(OUTPUT)/%.o: usertest/%.c $(wildcard include/*.h) usertest/usertest_common.h |
 # - libbpf (BPF program loading/management)
 # - libelf (ELF file parsing)
 # - libz (compression, used by libbpf)
-$(BPF_APPS): %: $(OUTPUT)/%.o $(LIBBPF_OBJ) | $(OUTPUT)
+# Link objects into final binaries under OUT_DIR
+$(OUT_DIR)/%: $(OUTPUT)/%.o $(LIBBPF_OBJ) | $(OUTPUT) $(OUT_DIR)
 	$(call msg,BINARY,$@)
 	$(Q)$(CC) $(CFLAGS) $^ $(ALL_LDFLAGS) -lelf -lz -lpthread -o $@
 
-$(USERTEST_APPS): %: $(OUTPUT)/%.o | $(OUTPUT)
-	$(call msg,BINARY,$@)
-	$(Q)$(CC) $(CFLAGS) $^ $(ALL_LDFLAGS) -lpthread -o $@
+# Keep compatibility: allow `make <app>` to build $(OUT_DIR)/<app>
+$(APPS): %: $(OUT_DIR)/%
 
 .PHONY: usertest
-usertest: $(USERTEST_APPS)
+usertest: $(patsubst %,$(OUT_DIR)/%,$(USERTEST_APPS))
 	@echo ""
 	@echo "Built userspace-only test runners:"
-	@for app in $(USERTEST_APPS); do echo "  - $$app"; done
+	@for app in $(patsubst %,$(OUT_DIR)/%,$(USERTEST_APPS)); do echo "  - $$app"; done
 
 # ============================================================================
 # TESTING TARGETS
 # ============================================================================
 
 .PHONY: test
-test: skeleton skeleton_msqueue
+
+## Assembly/disassembly target for built binaries
+.PHONY: asm
+asm: $(patsubst %,$(OUT_DIR)/%.S,$(BPF_APPS))
+
+$(OUT_DIR)/%.S: $(OUT_DIR)/% | $(OUT_DIR)
+	$(call msg,ASM,$@)
+	$(Q)$(OBJDUMP) -d -M intel -S $< > $@
+
+.PHONY: test
+test: $(OUT_DIR)/skeleton $(OUT_DIR)/skeleton_msqueue
 	@echo "Running basic tests..."
 	@echo ""
 	@echo "Test 1: Skeleton (list) - 5 second sleep"
-	sudo ./skeleton -d 5 || (echo "FAILED: skeleton"; exit 1)
+	sudo $(OUT_DIR)/skeleton -d 5 || (echo "FAILED: skeleton"; exit 1)
 	@echo ""
 	@echo "Test 2: Skeleton MS Queue - 5 second sleep"
-	sudo ./skeleton_msqueue -d 5 || (echo "FAILED: skeleton_msqueue"; exit 1)
+	sudo $(OUT_DIR)/skeleton_msqueue -d 5 || (echo "FAILED: skeleton_msqueue"; exit 1)
 	@echo ""
 	@echo "All tests passed!"
 
 .PHONY: test-stress
-test-stress: skeleton skeleton_msqueue
+
+test-stress: $(OUT_DIR)/skeleton $(OUT_DIR)/skeleton_msqueue
 	@echo "Running stress tests..."
 	@echo "This may take a few minutes..."
 	@echo ""
 	@echo "Stress test 1: Skeleton (list) - 30 second sleep"
-	sudo ./skeleton -d 30 || (echo "FAILED"; exit 1)
+	sudo $(OUT_DIR)/skeleton -d 30 || (echo "FAILED"; exit 1)
 	@echo ""
 	@echo "Stress test 2: Skeleton MS Queue - 30 second sleep"
-	sudo ./skeleton_msqueue -d 30 || (echo "FAILED"; exit 1)
+	sudo $(OUT_DIR)/skeleton_msqueue -d 30 || (echo "FAILED"; exit 1)
 	@echo ""
 	@echo "Stress tests passed!"
 
 .PHONY: test-verify
-test-verify: skeleton skeleton_msqueue
+
+test-verify: $(OUT_DIR)/skeleton $(OUT_DIR)/skeleton_msqueue
 	@echo "Running verification tests..."
 	@echo ""
 	@echo "Test 1: Skeleton (list) with verification"
-	sudo ./skeleton -d 5 -v || (echo "FAILED"; exit 1)
+	sudo $(OUT_DIR)/skeleton -d 5 -v || (echo "FAILED"; exit 1)
 	@echo ""
 	@echo "Test 2: Skeleton MS Queue with verification"
-	sudo ./skeleton_msqueue -d 5 -v || (echo "FAILED"; exit 1)
+	sudo $(OUT_DIR)/skeleton_msqueue -d 5 -v || (echo "FAILED"; exit 1)
 	@echo "Verification tests passed!"
 
 # ============================================================================
@@ -301,23 +322,31 @@ test-verify: skeleton skeleton_msqueue
 help:
 	@echo "BPF Arena Data Structure Testing Framework"
 	@echo ""
+	@echo "Prerequisites:"
+	@echo "  - Linux kernel 6.10+ with CONFIG_BPF_ARENA=y"
+	@echo "  - LLVM/Clang 15+ with BPF support (clang-20 recommended)"
+	@echo "  - libbpf 1.0+, libelf and zlib"
+	@echo "  - Initialize third-party submodules: git submodule update --init --recursive"
+	@echo ""
 	@echo "Targets:"
 	@echo "  all          Build all programs (default)"
 	@echo "  skeleton     Build skeleton test program"
 	@echo "  clean        Remove all build artifacts"
 	@echo "  test         Run basic smoke tests"
 	@echo "  test-stress  Run stress tests"
-	@echo "  test-verify  Run verification tests"
+	@echo "  test-verify  Run verification tests (uses -v)"
 	@echo "  help         Show this help message"
 	@echo ""
 	@echo "Options:"
 	@echo "  V=1          Verbose build output"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make                    # Build everything"
+	@echo "  make                    # Build everything (binaries placed in $(OUT_DIR))"
 	@echo "  make clean && make      # Clean build"
 	@echo "  make V=1 skeleton       # Verbose build of skeleton"
-	@echo "  make test               # Run tests"
+	@echo "  make test               # Run smoke tests (invokes built binaries under $(OUT_DIR))"
+	@echo "  sudo $(OUT_DIR)/skeleton     # Run the skeleton test (interactive)"
+	@echo "  sudo $(OUT_DIR)/skeleton -v  # Run with verification on exit"
 
 # ============================================================================
 # MAKE DIRECTIVES

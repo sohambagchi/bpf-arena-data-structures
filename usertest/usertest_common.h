@@ -91,6 +91,12 @@ static inline void usertest_arena_free(void *addr __attribute__((unused)))
 #define bpf_arena_alloc usertest_arena_alloc
 #define bpf_arena_free usertest_arena_free
 
+/*
+ * Note: smp_store_release and smp_load_acquire are now provided by
+ * bpf_arena_common.h (included via libarena_ds.h) using __atomic_store_n
+ * and __atomic_load_n with memory_order_release/acquire.
+ */
+
 static inline void usertest_print_config(const char *name, int producers, int consumers, int items_per_producer)
 {
 	fprintf(stdout,
