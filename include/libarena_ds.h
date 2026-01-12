@@ -139,40 +139,65 @@
 static void __arena * __arena page_frag_cur_page[NR_CPUS];
 static int __arena page_frag_cur_offset[NR_CPUS];
 
-/* Simple page_frag allocator */
+/* Helper function to handle the "Slow Path" allocation */
+static inline void __arena* bpf_arena_refill_page(int cpu)
+{
+    void __arena *page;
+    __u64 __arena *obj_cnt;
+
+    // 1. Allocate a fresh page
+    page = bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
+    if (!page)
+        return NULL;
+
+    // 2. Prepare the page
+    cast_kern(page);
+
+    // 3. Update global per-CPU state
+    page_frag_cur_page[cpu] = page;
+    page_frag_cur_offset[cpu] = PAGE_SIZE - 8;
+
+    // 4. Initialize object counter at the end of the page
+    obj_cnt = page + PAGE_SIZE - 8;
+    *obj_cnt = 0;
+
+    return page;
+}
+
+/* Main allocation function */
 static inline void __arena* bpf_arena_alloc(unsigned int size)
 {
-	__u64 __arena *obj_cnt;
-	__u32 cpu = bpf_get_smp_processor_id();
-	void __arena *page = page_frag_cur_page[cpu];
-	int __arena *cur_offset = &page_frag_cur_offset[cpu];
-	int offset;
+    __u64 __arena *obj_cnt;
+    __u32 cpu = bpf_get_smp_processor_id();
+    void __arena *page = page_frag_cur_page[cpu];
+    int __arena *cur_offset = &page_frag_cur_offset[cpu];
+    int offset;
 
-	size = round_up(size, 8);
-	if (size >= PAGE_SIZE - 8)
-		return NULL;
-	if (!page) {
-refill:
-		page = bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
-		if (!page)
-			return NULL;
-		cast_kern(page);
-		page_frag_cur_page[cpu] = page;
-		*cur_offset = PAGE_SIZE - 8;
-		obj_cnt = page + PAGE_SIZE - 8;
-		*obj_cnt = 0;
-	} else {
-		cast_kern(page);
-		obj_cnt = page + PAGE_SIZE - 8;
-	}
+    size = round_up(size, 8);
+    if (size >= PAGE_SIZE - 8)
+        return NULL;
 
-	offset = *cur_offset - size;
-	if (offset < 0)
-		goto refill;
+    // CHECK: Do we need to refill?
+    // Condition A: We don't have a page yet (!page)
+    // Condition B: We have a page, but not enough space (*cur_offset - size < 0)
+    if (!page || (*cur_offset - size < 0)) {
+        page = bpf_arena_refill_page(cpu);
+        if (!page)
+            return NULL;
+        // Note: The refill helper has already reset *cur_offset to (PAGE_SIZE - 8)
+    } else {
+        // FAST PATH: Prepare existing page
+        cast_kern(page);
+    }
 
-	(*obj_cnt)++;
-	*cur_offset = offset;
-	return page + offset;
+    // ALLOCATION: At this point, 'page' is valid and has sufficient space.
+    offset = *cur_offset - size;
+    obj_cnt = page + PAGE_SIZE - 8;
+
+    (*obj_cnt)++;
+    *cur_offset = offset;
+
+    return page + offset;
 }
 
 static inline void bpf_arena_free(void __arena *addr)

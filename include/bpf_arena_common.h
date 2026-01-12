@@ -6,6 +6,7 @@
 #define	NUMA_NO_NODE	(-1)
 #endif
 
+#ifdef __BPF__
 #ifndef WRITE_ONCE
 #define WRITE_ONCE(x, val) ((*(volatile typeof(x) *) &(x)) = (val))
 #endif
@@ -17,7 +18,24 @@
 #ifndef barrier
 #define barrier()		asm volatile("" ::: "memory")
 #endif
+#endif
 
+#ifndef __BPF__
+#ifndef WRITE_ONCE
+#define WRITE_ONCE(x, val) \
+	atomic_store_explicit(&(x), (val), memory_order_relaxed)
+#endif
+#ifndef READ_ONCE
+#define READ_ONCE(x) \
+	atomic_load_explicit(&(x), memory_order_relaxed)
+#endif
+#ifndef barrier
+#define barrier()		atomic_thread_fence(memory_order_seq_cst)
+#endif
+#endif
+
+
+#ifdef __BPF__
 #ifndef smp_store_release
 # define smp_store_release(p, v)		\
 do {						\
@@ -34,7 +52,30 @@ do {						\
 	(typeof(*p))__p;					\
 })
 #endif
+#endif /* __BPF__ */
 
+/*
+ * Userspace atomic definitions
+ * These provide C11 atomic semantics for userspace programs (skeleton and usertest)
+ * using __atomic_load_n and __atomic_store_n with proper memory ordering.
+ * 
+ * Note: __atomic_store_n returns void (unlike smp_store_release which could be used in expressions)
+ *       __atomic_load_n returns the loaded value
+ */
+#ifndef __BPF__
+#include <stdatomic.h>
+
+#ifndef smp_store_release
+# define smp_store_release(p, v) \
+	__atomic_store_n((p), (v), memory_order_release)
+#endif
+
+#ifndef smp_load_acquire
+# define smp_load_acquire(p) \
+	__atomic_load_n((p), memory_order_acquire)
+#endif
+
+#endif /* !__BPF__ */
 
 #ifndef arena_container_of
 #define arena_container_of(ptr, type, member)			\
