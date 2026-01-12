@@ -13,13 +13,13 @@ from typing import List
 
 
 def find_executables() -> List[str]:
-    """Find compiled executables in current directory."""
+    """Find compiled executables in ./build."""
     candidates = ['skeleton', 'skeleton_msqueue', 'skeleton_vyukhov', 'skeleton_mpsc', 'skeleton_bst', 'skeleton_folly_spsc', 'skeleton_bintree']
     executables = []
     
     for exe in candidates:
-        if os.path.isfile(exe) and os.access(exe, os.X_OK):
-            executables.append(exe)
+        if os.path.isfile(os.path.join('build', exe)) and os.access(os.path.join('build', exe), os.X_OK):
+            executables.append(os.path.join('build', exe))
             print(f"Found executable: {exe}")
     
     return executables
