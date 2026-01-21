@@ -81,7 +81,7 @@ INCLUDES := -I$(OUTPUT) -I./third_party/libbpf/include/uapi -I$(dir $(VMLINUX)) 
 # COMPILER FLAGS
 # ============================================================================
 # Userspace C flags
-CFLAGS := -g -Wall -Wextra -O0
+CFLAGS := -g -Wall -Wextra -O0 -DLKMM_OPTIMIZED
 
 # Linker flags
 ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
@@ -274,6 +274,13 @@ asm: $(patsubst %,$(OUT_DIR)/%.S,$(BPF_APPS))
 
 $(OUT_DIR)/%.S: $(OUT_DIR)/% | $(OUT_DIR)
 	$(call msg,ASM,$@)
+	$(Q)$(OBJDUMP) -d -M intel -S $< > $@
+
+.PHONY: asm-user
+asm-user: $(patsubst %,$(OUT_DIR)/%.S,$(USERTEST_APPS))
+
+$(OUT_DIR)/%.S: $(OUT_DIR)/% | $(OUT_DIR)
+	$(call msg,ASM-USER,$@)
 	$(Q)$(OBJDUMP) -d -M intel -S $< > $@
 
 .PHONY: test
