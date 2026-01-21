@@ -659,7 +659,8 @@ static inline int ds_bintree_insert(struct ds_bintree_head __arena *head,
 			/* Key exists - update the value atomically */
 			cast_kern(res);
 			cast_kern(res.pLeaf);
-			res.pLeaf->kv.value = kv.value;
+			// res.pLeaf->kv.value = kv.value;
+			smp_store_release(&res.pLeaf->kv.value, kv.value);
 			head->stats.insert_into_updates++;
 			return DS_SUCCESS;
 		}
