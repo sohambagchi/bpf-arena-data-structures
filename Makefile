@@ -31,6 +31,14 @@ OUT_DIR ?= build
 # Recommend Clang 15+ for BPF arena support (clang-20 recommended if available)
 CLANG ?= clang-20
 
+ifeq ($(origin CLANG), file)
+ifeq ($(shell command -v $(CLANG) >/dev/null 2>&1; echo $$?),1)
+ifneq ($(shell command -v clang >/dev/null 2>&1; echo $$?),1)
+CLANG := clang
+endif
+endif
+endif
+
 # Compiler for userspace programs
 CC ?= gcc
 OBJDUMP ?= objdump
@@ -92,8 +100,8 @@ ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
 # List of all applications to build
 # - BPF_APPS: BPF-backed (need skeleton generation + libbpf)
 # - USERTEST_APPS: pure userspace pthread tests (no BPF, no CLI args)
-BPF_APPS = skeleton skeleton_msqueue skeleton_vyukhov skeleton_mpsc skeleton_bintree skeleton_bst skeleton_folly_spsc
-USERTEST_APPS = usertest_list usertest_msqueue usertest_mpsc usertest_vyukhov usertest_folly_spsc usertest_bst usertest_bintree
+BPF_APPS = skeleton skeleton_msqueue skeleton_vyukhov skeleton_mpsc skeleton_bintree skeleton_bst skeleton_folly_spsc skeleton_ck_fifo_spsc skeleton_ck_ring_spsc skeleton_ck_stack_upmc
+USERTEST_APPS = usertest_list usertest_msqueue usertest_mpsc usertest_vyukhov usertest_folly_spsc usertest_bst usertest_bintree usertest_ck_fifo_spsc usertest_ck_ring_spsc usertest_ck_stack_upmc
 APPS = $(BPF_APPS) $(USERTEST_APPS)
 
 # Final binaries (placed in OUT_DIR)

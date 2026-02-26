@@ -5,3 +5,5 @@ build/
 *.tmp
 AGENT.md
 ./usertest*
+.gemini
+.opencode/
