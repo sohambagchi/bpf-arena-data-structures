@@ -41,22 +41,22 @@ static __always_inline int handle_operation(struct ds_operation *op)
 
 	switch (op->type) {
 	case DS_OP_INIT:
-		result = ds_ck_ring_spsc_init(ds_head, config_queue_capacity);
+		result = ds_ck_ring_spsc_init_lkmm(ds_head, config_queue_capacity);
 		if (result == DS_SUCCESS)
 			initialized = true;
 		break;
 	case DS_OP_INSERT:
-		result = ds_ck_ring_spsc_insert(ds_head, op->kv.key, op->kv.value);
+		result = ds_ck_ring_spsc_insert_lkmm(ds_head, op->kv.key, op->kv.value);
 		break;
 	case DS_OP_DELETE:
 	case DS_OP_POP:
-		result = ds_ck_ring_spsc_pop(ds_head, &op->kv);
+		result = ds_ck_ring_spsc_pop_lkmm(ds_head, &op->kv);
 		break;
 	case DS_OP_SEARCH:
-		result = ds_ck_ring_spsc_search(ds_head, op->kv.key);
+		result = ds_ck_ring_spsc_search_lkmm(ds_head, op->kv.key);
 		break;
 	case DS_OP_VERIFY:
-		result = ds_ck_ring_spsc_verify(ds_head);
+		result = ds_ck_ring_spsc_verify_lkmm(ds_head);
 		break;
 	default:
 		result = DS_ERROR_INVALID;
@@ -84,7 +84,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 	/* Lazy initialization on first trigger */
 	if (!initialized) {
 		ds_head = &global_ds_head;
-		result = ds_ck_ring_spsc_init(ds_head, config_queue_capacity);
+		result = ds_ck_ring_spsc_init_lkmm(ds_head, config_queue_capacity);
 		if (result != DS_SUCCESS) {
 			total_kernel_failures++;
 			return 0;
@@ -97,7 +97,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 	/* Producer operation: insert (PID, timestamp) */
 	pid = bpf_get_current_pid_tgid() >> 32;
 	ts = bpf_ktime_get_ns();
-	result = ds_ck_ring_spsc_insert(ds_head, pid, ts);
+	result = ds_ck_ring_spsc_insert_lkmm(ds_head, pid, ts);
 
 	total_kernel_ops++;
 	if (result != DS_SUCCESS)

@@ -47,7 +47,7 @@ static void poll_and_dequeue(void)
 	       head->capacity - 1, head->capacity);
 
 	while (!stop_test) {
-		result = ds_ck_ring_spsc_pop(head, &data);
+		result = ds_ck_ring_spsc_pop_c(head, &data);
 
 		if (result == DS_SUCCESS) {
 			printf("Dequeued element %llu: pid=%llu, ts=%llu\n",
@@ -83,10 +83,10 @@ static int verify_data_structure(void)
 		return DS_ERROR_INVALID;
 	}
 
-	result = ds_ck_ring_spsc_verify(head);
+	result = ds_ck_ring_spsc_verify_c(head);
 	if (result == DS_SUCCESS) {
 		printf("CK SPSC ring verification PASSED\n");
-		printf("  Size: %u\n", ds_ck_ring_spsc_size(head));
+		printf("  Size: %u\n", ds_ck_ring_spsc_size_c(head));
 		printf("  c_head: %u\n", head->c_head);
 		printf("  p_tail: %u\n", head->p_tail);
 	} else {
@@ -114,7 +114,7 @@ static void print_statistics(void)
 
 	printf("\nRing State:\n");
 	if (head && head->slots) {
-		__u32 remaining = ds_ck_ring_spsc_size(head);
+		__u32 remaining = ds_ck_ring_spsc_size_c(head);
 		__u64 total_produced = skel->bss->total_kernel_ops - skel->bss->total_kernel_failures;
 		__u64 total_accounted = dequeued_count + remaining;
 
