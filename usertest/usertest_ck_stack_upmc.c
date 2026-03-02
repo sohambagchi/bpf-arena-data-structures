@@ -34,7 +34,7 @@ static void *producer_thread(void *arg)
 		uint64_t key = (uint64_t)pa->tid * 1000u + (uint64_t)(i + 1);
 		uint64_t value = usertest_now_ns();
 
-		while (!ds_ck_stack_upmc_trypush_upmc(&c->stack, entry, key, value)) {
+		while (!ds_ck_stack_upmc_trypush_upmc_c(&c->stack, entry, key, value)) {
 			usertest_sleep_us(USERTEST_POLL_US);
 		}
 
@@ -59,7 +59,7 @@ static void *consumer_thread(void *arg)
 		if (done >= c->expected)
 			return NULL;
 
-		entry = ds_ck_stack_upmc_pop_upmc(&c->stack);
+		entry = ds_ck_stack_upmc_pop_upmc_c(&c->stack);
 		if (entry) {
 			uint64_t key;
 			uint64_t n;
@@ -101,7 +101,7 @@ int main(void)
 	usertest_print_config("CK Treiber Stack UPMC", USERTEST_NUM_PRODUCERS,
 			      USERTEST_NUM_CONSUMERS, USERTEST_ITEMS_PER_PRODUCER);
 
-	ds_ck_stack_upmc_init(&c.stack);
+	ds_ck_stack_upmc_init_c(&c.stack);
 	c.expected = (uint64_t)USERTEST_NUM_PRODUCERS * (uint64_t)USERTEST_ITEMS_PER_PRODUCER;
 
 	for (int i = 0; i < USERTEST_NUM_CONSUMERS; i++) {

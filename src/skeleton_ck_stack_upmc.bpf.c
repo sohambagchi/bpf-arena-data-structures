@@ -35,7 +35,7 @@ static __always_inline int init_data_structure(void)
 		return DS_SUCCESS;
 
 	ds_head = &global_ds_head;
-	ds_ck_stack_upmc_init(ds_head);
+	ds_ck_stack_upmc_init_lkmm(ds_head);
 	initialized = true;
 	return DS_SUCCESS;
 }
@@ -57,7 +57,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 
 	pid = bpf_get_current_pid_tgid() >> 32;
 	ts = bpf_ktime_get_ns();
-	result = ds_ck_stack_upmc_insert(ds_head, pid, ts);
+	result = ds_ck_stack_upmc_insert_lkmm(ds_head, pid, ts);
 
 	total_kernel_ops++;
 	if (result != DS_SUCCESS)

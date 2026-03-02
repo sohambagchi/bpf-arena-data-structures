@@ -51,7 +51,7 @@ static void poll_and_pop(void)
 	printf("Stack initialized. Polling pops (Ctrl+C to stop)...\n\n");
 	while (!stop_test) {
 		head = &skel->arena->global_ds_head;
-		rc = ds_ck_stack_upmc_pop(head, &out);
+		rc = ds_ck_stack_upmc_pop_c(head, &out);
 
 		if (rc == DS_SUCCESS) {
 			printf("Popped element %llu: key=%llu value=%llu\n",
@@ -72,7 +72,7 @@ static int verify_data_structure(void)
 	struct ds_ck_stack_upmc_head *head = &skel->arena->global_ds_head;
 	int rc;
 
-	rc = ds_ck_stack_upmc_verify(head);
+	rc = ds_ck_stack_upmc_verify_c(head);
 	if (rc == DS_SUCCESS)
 		printf("Verification passed\n");
 	else
