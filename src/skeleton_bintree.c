@@ -90,7 +90,7 @@ static void search_for_pids()
 		/* Try to search for various keys */
 		for (int i = 0; i < num_keys && !stop_test; i++) {
             struct ds_kv kv = { .key = test_keys[i], .value = 0 };
-			result = ds_bintree_search(head, kv);
+			result = ds_bintree_search_c(head, kv);
 			search_count++;
 			
 			if (result == DS_SUCCESS) {
@@ -103,7 +103,7 @@ static void search_for_pids()
 		/* Also try to search for current PID */
 		__u64 my_pid = getpid();
 		struct ds_kv kv = { .key = my_pid, .value = 0 };
-		result = ds_bintree_search(head, kv);
+		result = ds_bintree_search_c(head, kv);
 		search_count++;
 		
 		if (result == DS_SUCCESS) {
@@ -212,7 +212,7 @@ static int verify_data_structure(void)
 	
 	printf("Verifying data structure from userspace...\n");
 	
-	int result = ds_bintree_verify(head);
+	int result = ds_bintree_verify_c(head);
 	if (result == DS_SUCCESS) {
 		printf("✓ Data structure verification PASSED\n");
 	} else {

@@ -84,28 +84,28 @@ static __always_inline int handle_operation(struct ds_operation *op)
 	switch (op->type) {
 	case DS_OP_INIT:
 		/* DS_API_INSERT: Initialize SPSC queue with configured size */
-		result = ds_spsc_init(ds_head, config_queue_size);
+		result = ds_spsc_init_lkmm(ds_head, config_queue_size);
 		initialized = true;
 		break;
 		
 	case DS_OP_INSERT:
 		/* DS_API_INSERT: Producer insert operation */
-		result = ds_spsc_insert(ds_head, op->kv.key, op->kv.value);
+		result = ds_spsc_insert_lkmm(ds_head, op->kv.key, op->kv.value);
 		break;
 		
 	case DS_OP_DELETE:
 		/* DS_API_INSERT: Consumer delete/pop operation (not called in kernel) */
-		result = ds_spsc_delete(ds_head, &op->kv);
+		result = ds_spsc_delete_lkmm(ds_head, &op->kv);
 		break;
 		
 	case DS_OP_SEARCH:
 		/* DS_API_INSERT: Search not supported for SPSC queue */
-		result = ds_spsc_search(ds_head, op->kv.key);
+		result = ds_spsc_search_lkmm(ds_head, op->kv.key);
 		break;
 		
 	case DS_OP_VERIFY:
 		/* DS_API_INSERT: Verify queue integrity */
-		result = ds_spsc_verify(ds_head);
+		result = ds_spsc_verify_lkmm(ds_head);
 		break;
 		
 	default:
@@ -143,7 +143,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 	if (!initialized) {
 		ds_head = &global_ds_head;
 		cast_user(ds_head);
-		result = ds_spsc_init(ds_head, config_queue_size);
+		result = ds_spsc_init_lkmm(ds_head, config_queue_size);
 		if (result != DS_SUCCESS) {
 			total_kernel_failures++;
 			return 0;
@@ -158,7 +158,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 	__u64 pid = bpf_get_current_pid_tgid() >> 32;
 	__u64 ts = bpf_ktime_get_ns();
 	
-	result = ds_spsc_insert(ds_head, pid, ts);
+	result = ds_spsc_insert_lkmm(ds_head, pid, ts);
 	
 	/* Update statistics */
 	total_kernel_ops++;

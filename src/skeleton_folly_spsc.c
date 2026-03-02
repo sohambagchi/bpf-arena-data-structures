@@ -92,7 +92,7 @@ static void poll_and_dequeue()
 	       head->size - 1, head->size);
 	
 	while (!stop_test) {
-		result = ds_spsc_delete(head, &data);
+		result = ds_spsc_delete_c(head, &data);
 		
 		if (result == DS_SUCCESS) {
 			printf("Dequeued element %llu: pid=%llu, ts=%llu\n", 
@@ -137,10 +137,10 @@ static int verify_data_structure(void)
 		return DS_ERROR_INVALID;
 	}
 	
-	int result = ds_spsc_verify(head);
+	int result = ds_spsc_verify_c(head);
 	if (result == DS_SUCCESS) {
 		printf("✓ SPSC queue verification PASSED\n");
-		printf("  Queue size: %u elements\n", ds_spsc_size(head));
+		printf("  Queue size: %u elements\n", ds_spsc_size_c(head));
 		printf("  Read index: %u\n", head->read_idx.idx);
 		printf("  Write index: %u\n", head->write_idx.idx);
 	} else {
@@ -180,7 +180,7 @@ static void print_statistics(void)
 	printf("\nQueue State:\n");
 	struct ds_spsc_queue_head *head = &skel->arena->global_ds_head;
 	if (head && head->records) {
-		__u32 remaining = ds_spsc_size(head);
+		__u32 remaining = ds_spsc_size_c(head);
 		printf("  Elements remaining:    %u\n", remaining);
 		printf("  Queue capacity:        %u\n", head->size - 1);
 		printf("  Read index:            %u\n", head->read_idx.idx);

@@ -81,28 +81,28 @@ static __always_inline int handle_operation(struct ds_operation *op)
 	switch (op->type) {
 	case DS_OP_INIT:
 		/* DS_API_INSERT: Call your init function */
-		result = ds_bintree_init(ds_head);
+		result = ds_bintree_init_lkmm(ds_head);
 		initialized = true;
 		break;
 		
 	case DS_OP_INSERT:
 		/* DS_API_INSERT: Call your insert function */
-		result = ds_bintree_insert(ds_head, op->kv);
+		result = ds_bintree_insert_lkmm(ds_head, op->kv);
 		break;
 		
 	case DS_OP_DELETE:
 		/* DS_API_INSERT: Call your delete function */
-		result = ds_bintree_delete(ds_head, op->kv);
+		result = ds_bintree_delete_lkmm(ds_head, op->kv);
 		break;
 		
 	case DS_OP_SEARCH:
 		/* DS_API_INSERT: Call your search function */
-		result = ds_bintree_search(ds_head, op->kv);
+		result = ds_bintree_search_lkmm(ds_head, op->kv);
 		break;
 		
 	case DS_OP_VERIFY:
 		/* DS_API_INSERT: Call your verify function */
-		result = ds_bintree_verify(ds_head);
+		result = ds_bintree_verify_lkmm(ds_head);
 		break;
 		
 	default:
@@ -136,7 +136,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 	ds_head = &global_ds_head;
 
 	if (!initialized) {
-		result = ds_bintree_init(ds_head);
+		result = ds_bintree_init_lkmm(ds_head);
 		if (result != DS_SUCCESS) {
 			total_kernel_failures++;
 			return 0;
@@ -150,7 +150,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 	pid = bpf_get_current_pid_tgid() >> 32;
 	ts = bpf_ktime_get_ns();
 	struct ds_kv kv = { .key = pid, .value = ts };
-	result = ds_bintree_insert(ds_head, kv);
+	result = ds_bintree_insert_lkmm(ds_head, kv);
 	
 	/* Update statistics */
 	total_kernel_ops++;

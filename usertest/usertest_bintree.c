@@ -81,7 +81,7 @@ static void *producer_thread(void *arg)
 		};
 
 		for (;;) {
-			int rc = ds_bintree_insert(&c->tree, kv);
+			int rc = ds_bintree_insert_c(&c->tree, kv);
 			if (rc == DS_SUCCESS)
 				break;
 			if (rc != DS_ERROR_BUSY) {
@@ -145,7 +145,7 @@ int main(void)
 	usertest_print_config("Non-blocking BINTREE (bintree)", USERTEST_NUM_PRODUCERS, USERTEST_NUM_CONSUMERS,
 			      USERTEST_ITEMS_PER_PRODUCER);
 
-	if (ds_bintree_init(&c.tree) != DS_SUCCESS) {
+	if (ds_bintree_init_c(&c.tree) != DS_SUCCESS) {
 		fprintf(stderr, "bintree: init failed\n");
 		return 1;
 	}
@@ -171,7 +171,7 @@ int main(void)
 
 	dump_final_kvs(&c.tree);
 
-	int vrc = ds_bintree_verify(&c.tree);
+	int vrc = ds_bintree_verify_c(&c.tree);
 	if (vrc != DS_SUCCESS) {
 		fprintf(stderr, "bintree: verify rc=%d\n", vrc);
 		return 1;

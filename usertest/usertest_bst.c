@@ -31,7 +31,7 @@ static void *producer_thread(void *arg)
 		uint64_t value = usertest_now_ns();
 
 		for (;;) {
-			int rc = ds_bst_insert(&c->tree, key, value);
+			int rc = ds_bst_insert_c(&c->tree, key, value);
 			if (rc == DS_SUCCESS)
 				break;
 			if (rc != DS_ERROR_BUSY) {
@@ -62,7 +62,7 @@ static void *consumer_thread(void *arg)
 		if (done >= c->expected)
 			return NULL;
 
-		int rc = ds_bst_pop(&c->tree, &out);
+		int rc = ds_bst_pop_c(&c->tree, &out);
 		if (rc == DS_SUCCESS) {
 			uint64_t n = atomic_fetch_add_explicit(&c->consumed, 1, memory_order_relaxed) + 1;
 			fprintf(stdout, "consumer: key=%" PRIu64 " value=%" PRIu64 " (n=%" PRIu64 ")\n",
@@ -88,7 +88,7 @@ int main(void)
 	usertest_print_config("Ellen BST", USERTEST_NUM_PRODUCERS, USERTEST_NUM_CONSUMERS,
 			      USERTEST_ITEMS_PER_PRODUCER);
 
-	if (ds_bst_init(&c.tree) != DS_SUCCESS) {
+	if (ds_bst_init_c(&c.tree) != DS_SUCCESS) {
 		fprintf(stderr, "bst: init failed\n");
 		return 1;
 	}
