@@ -50,7 +50,7 @@ static void poll_and_dequeue(void)
 	printf("FIFO initialized, polling (Ctrl+C to stop)\n\n");
 
 	while (!stop_test) {
-		rc = ds_ck_fifo_spsc_delete(head, &out);
+		rc = ds_ck_fifo_spsc_delete_c(head, &out);
 		if (rc == DS_SUCCESS) {
 			printf("dequeue[%llu]: pid=%llu ts=%llu\n",
 			       dequeued_count,
@@ -76,7 +76,7 @@ static int verify_data_structure(void)
 	struct ds_ck_fifo_spsc_head *head = &skel->arena->global_ds_head;
 	int rc;
 
-	rc = ds_ck_fifo_spsc_verify(head);
+	rc = ds_ck_fifo_spsc_verify_c(head);
 	if (rc == DS_SUCCESS)
 		printf("verify: PASS\n");
 	else
