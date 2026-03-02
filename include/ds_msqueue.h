@@ -137,10 +137,18 @@ static inline int __msqueue_add_node(struct ds_msqueue_elem __arena *new_node, s
 	while (retry_count < max_retries && can_loop) {
 		/* Read tail */
 
+		#ifdef LKMM_OPTIMIZED
+		tail = READ_ONCE(queue->tail);
+		#else
 		tail = smp_load_acquire(&queue->tail);
+		#endif
 
-		cast_kern(tail);		
+		cast_kern(tail);
+		#ifdef LKMM_OPTIMIZED		
+		next = READ_ONCE(tail->node.next);
+		#else
 		next = smp_load_acquire(&tail->node.next);
+		#endif
 		
 		cast_user(next);
 		if (next != NULL) {
@@ -255,11 +263,21 @@ static inline int ds_msqueue_pop(struct ds_msqueue __arena *queue, struct ds_kv 
 	while (retry_count < max_retries && can_loop) {
 		/* Read Head, Tail, and next */
 
+		#ifdef LKMM_OPTIMIZED
+		head = READ_ONCE(queue->head);
+		#else
 		head = smp_load_acquire(&queue->head);
+		#endif
+
 		tail = smp_load_acquire(&queue->tail);
 
 		cast_kern(head);
+		
+		#ifdef LKMM_OPTIMIZED
+		next = READ_ONCE(head->node.next);
+		#else
 		next = smp_load_acquire(&head->node.next);
+		#endif
 
 		cast_user(head);
 		if ( smp_load_acquire(&queue->head) != head ) {
