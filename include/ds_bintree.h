@@ -221,7 +221,7 @@ static inline __u64 bintree_get_ptr(__u64 update)
 	return (update & UPDATE_MASK_PTR);
 }
 
-static inline struct ds_bintree_tree_node __arena * bintree_get_child(struct ds_bintree_internal __arena *node, bool bRight, enum ds_bintree_mo mo) {
+static inline struct ds_bintree_tree_node __arena * bintree_get_child_lkmm(struct ds_bintree_internal __arena *node, bool bRight, enum ds_bintree_mo mo) {
 	if (mo == BINTREE_RELAXED) {
 		return bRight ? READ_ONCE(node->pRight) : READ_ONCE(node->pLeft);
 	} else {
@@ -237,11 +237,11 @@ static inline bool bintree_is_leaf(struct ds_bintree_tree_node __arena *node) {
 	return node->type == BINTREE_NODE_LEAF;
 }
 
-static inline unsigned int bintree_get_infinite_key(struct ds_bintree_tree_node __arena *node) {
+static inline unsigned int bintree_get_infinite_key_lkmm(struct ds_bintree_tree_node __arena *node) {
 	return smp_load_acquire(&node->type) & BINTREE_NODE_KEY_INFINITE;
 }
 
-static inline void bintree_set_infinite_key(struct ds_bintree_tree_node __arena *node, int nInf) {
+static inline void bintree_set_infinite_key_lkmm(struct ds_bintree_tree_node __arena *node, int nInf) {
 	unsigned int nFlags = READ_ONCE(node->type);
 	nFlags &= ~BINTREE_NODE_KEY_INFINITE;
 	switch (nInf) {
@@ -285,11 +285,11 @@ struct bintree_search_result {
  * FORWARD DECLARATIONS
  * ======================================================================== */
 
-static inline void bintree_help(__u64 update);
-static inline void bintree_help_insert(struct ds_bintree_update_desc __arena *op);
-static inline bool bintree_help_delete(struct ds_bintree_update_desc __arena *op);
-static inline void bintree_help_marked(struct ds_bintree_update_desc __arena *op);
-static inline void bintree_cas_child(struct ds_bintree_internal __arena *parent,
+static inline void bintree_help_lkmm(__u64 update);
+static inline void bintree_help_insert_lkmm(struct ds_bintree_update_desc __arena *op);
+static inline bool bintree_help_delete_lkmm(struct ds_bintree_update_desc __arena *op);
+static inline void bintree_help_marked_lkmm(struct ds_bintree_update_desc __arena *op);
+static inline void bintree_cas_child_lkmm(struct ds_bintree_internal __arena *parent,
                                   void __arena *old_node,
                                   void __arena *new_node);
 
@@ -306,7 +306,7 @@ static inline void bintree_cas_child(struct ds_bintree_internal __arena *parent,
  * Traverses the tree to find the leaf that would contain key.
  * Returns grandparent, parent, and leaf context needed for updates.
  */
-static __always_inline bool bintree_search(struct ds_bintree_head __arena *head, __u64 key,
+static __always_inline bool bintree_search_lkmm(struct ds_bintree_head __arena *head, __u64 key,
                                struct bintree_search_result *res)
 {
 	struct ds_bintree_internal __arena *pParent;
@@ -348,10 +348,10 @@ static __always_inline bool bintree_search(struct ds_bintree_head __arena *head,
 		}
 
 		if (key < pParent->key.key) {
-			pLeaf = bintree_get_child(pParent, false, BINTREE_ACQUIRE);
+			pLeaf = bintree_get_child_lkmm(pParent, false, BINTREE_ACQUIRE);
 			bRightLeaf = false;
 		} else {
-			pLeaf = bintree_get_child(pParent, true, BINTREE_ACQUIRE);
+			pLeaf = bintree_get_child_lkmm(pParent, true, BINTREE_ACQUIRE);
 			bRightLeaf = true;
 		}
 
@@ -383,7 +383,7 @@ static __always_inline bool bintree_search(struct ds_bintree_head __arena *head,
  * @old_node: Expected old child
  * @new_node: New child to install
  */
-static inline void bintree_cas_child(struct ds_bintree_internal __arena *parent,
+static inline void bintree_cas_child_lkmm(struct ds_bintree_internal __arena *parent,
                                   void __arena *old_node,
                                   void __arena *new_node)
 {
@@ -418,7 +418,7 @@ static inline void bintree_cas_child(struct ds_bintree_internal __arena *parent,
  * 1. CAS child pointer of op->p to point to op->new_internal
  * 2. Unflag op->p->update (IFLAG -> CLEAN)
  */
-static inline void bintree_help_insert(struct ds_bintree_update_desc __arena *op)
+static inline void bintree_help_insert_lkmm(struct ds_bintree_update_desc __arena *op)
 {
 	cast_kern(op);
 	
@@ -445,7 +445,7 @@ static inline void bintree_help_insert(struct ds_bintree_update_desc __arena *op
  * 2. Splice out op->p by swinging op->gp's child to sibling
  * 3. Unflag op->gp->update (DFLAG -> CLEAN)
  */
-static inline void bintree_help_marked(struct ds_bintree_update_desc __arena *op)
+static inline void bintree_help_marked_lkmm(struct ds_bintree_update_desc __arena *op)
 {
 	struct ds_bintree_internal __arena *p;
 	void __arena *sibling;
@@ -465,7 +465,7 @@ static inline void bintree_help_marked(struct ds_bintree_update_desc __arena *op
 	}
 	
 	/* Physically delete p by swinging gp's child to sibling */
-	bintree_cas_child(op->delete->pGrandParent, p, sibling);
+	bintree_cas_child_lkmm(op->delete->pGrandParent, p, sibling);
 	
 	/* Unflag grandparent (DFLAG -> CLEAN) */
 	__u64 expected = bintree_make_update(op, BINTREE_DFLAG);
@@ -487,7 +487,7 @@ static inline void bintree_help_marked(struct ds_bintree_update_desc __arena *op
  * 
  * Returns: true if deletion completed, false if backtracked
  */
-static inline bool bintree_help_delete(struct ds_bintree_update_desc __arena *op)
+static inline bool bintree_help_delete_lkmm(struct ds_bintree_update_desc __arena *op)
 {
 	__u64 expected;
 	__u64 marked_val;
@@ -504,7 +504,7 @@ static inline bool bintree_help_delete(struct ds_bintree_update_desc __arena *op
 	
 	if (res == expected || res == marked_val) {
 		/* Successfully marked (or already marked by us) */
-		bintree_help_marked(op);
+		bintree_help_marked_lkmm(op);
 		return true;
 	}
 	
@@ -527,7 +527,7 @@ static inline bool bintree_help_delete(struct ds_bintree_update_desc __arena *op
  * 
  * Examines the state and dispatches to appropriate helper.
  */
-static inline void bintree_help(__u64 update)
+static inline void bintree_help_lkmm(__u64 update)
 {
 	void __arena *info = (void __arena *)bintree_get_ptr(update);
 	int state = bintree_get_bits(update);
@@ -538,11 +538,11 @@ static inline void bintree_help(__u64 update)
 	cast_kern(info);
 	
 	if (state == BINTREE_IFLAG) {
-		bintree_help_insert(info);
+		bintree_help_insert_lkmm(info);
 	} else if (state == BINTREE_MARK) {
-		bintree_help_marked(info);
+		bintree_help_marked_lkmm(info);
 	} else if (state == BINTREE_DFLAG) {
-		bintree_help_delete(info);
+		bintree_help_delete_lkmm(info);
 	}
 }
 
@@ -563,7 +563,7 @@ static inline void bintree_help(__u64 update)
  * 
  * Returns: DS_SUCCESS on success, DS_ERROR_NOMEM if allocation fails
  */
-static inline int ds_bintree_init(struct ds_bintree_head __arena *head)
+static inline int ds_bintree_init_lkmm(struct ds_bintree_head __arena *head)
 {
 	struct ds_bintree_leaf __arena *leaf1, *leaf2;
 	struct ds_bintree_internal __arena *root;
@@ -634,7 +634,7 @@ static inline int ds_bintree_init(struct ds_bintree_head __arena *head)
  *          DS_ERROR_NOMEM if allocation fails
  *          DS_ERROR_INVALID if key is invalid
  */
-static inline int ds_bintree_insert(struct ds_bintree_head __arena *head,
+static inline int ds_bintree_insert_lkmm(struct ds_bintree_head __arena *head,
                                      struct ds_kv kv)
 {
 	struct bintree_search_result res;
@@ -655,7 +655,7 @@ static inline int ds_bintree_insert(struct ds_bintree_head __arena *head,
 	
 	while (iterations < BINTREE_MAX_DEPTH && can_loop) {
 		/* Search for key */
-		if (bintree_search(head, kv.key, &res)) {
+		if (bintree_search_lkmm(head, kv.key, &res)) {
 			/* Key exists - update the value atomically */
 			cast_kern(res);
 			cast_kern(res.pLeaf);
@@ -686,7 +686,7 @@ static inline int ds_bintree_insert(struct ds_bintree_head __arena *head,
 			continue;
 		}
 		
-		if (bintree_get_child(res.pParent, res.bRightLeaf, BINTREE_RELAXED) == (struct ds_bintree_tree_node __arena *)res.pLeaf) {
+		if (bintree_get_child_lkmm(res.pParent, res.bRightLeaf, BINTREE_RELAXED) == (struct ds_bintree_tree_node __arena *)res.pLeaf) {
 			/* Allocate new leaf */
 			new_leaf = (struct ds_bintree_leaf __arena *)bpf_arena_alloc(sizeof(*new_leaf));
 			if (!new_leaf) {
@@ -714,17 +714,17 @@ static inline int ds_bintree_insert(struct ds_bintree_head __arena *head,
 			bool bNewKeyIsLess = (kv.key < res.pLeaf->kv.key);
 			if (bNewKeyIsLess) {
 				if (res.pGrandParent) {
-					bintree_set_infinite_key(&new_internal->header, 0);
+					bintree_set_infinite_key_lkmm(&new_internal->header, 0);
 					new_internal->key.key = res.pLeaf->kv.key;
 				} else {
 					/* Root case - pLeaf should have INF1 key */
-					bintree_set_infinite_key(&new_internal->header, 1);
+					bintree_set_infinite_key_lkmm(&new_internal->header, 1);
 				}
 				WRITE_ONCE(new_internal->pLeft, &new_leaf->header);
 				WRITE_ONCE(new_internal->pRight, &res.pLeaf->header);
 			} else {
 				/* New key is greater - becomes right child */
-				bintree_set_infinite_key(&new_internal->header, 0);
+				bintree_set_infinite_key_lkmm(&new_internal->header, 0);
 
 				new_internal->key.key = kv.key;
 				WRITE_ONCE(new_internal->pLeft, &res.pLeaf->header);
@@ -764,7 +764,7 @@ static inline int ds_bintree_insert(struct ds_bintree_head __arena *head,
 			__u64 cas_result = arena_atomic_cmpxchg(&res.pParent->m_pUpdate, expected, desired, ARENA_ACQ_REL, ARENA_ACQUIRE);
 			if (cas_result == expected) {
 				/* CAS succeeded, help complete the operation */
-				bintree_help_insert(pOp);
+				bintree_help_insert_lkmm(pOp);
 				arena_atomic_inc(&head->count);
 				head->stats.total_inserts++;
 				return DS_SUCCESS;
@@ -793,7 +793,7 @@ static inline int ds_bintree_insert(struct ds_bintree_head __arena *head,
  *          DS_ERROR_NOT_FOUND if key doesn't exist
  *          DS_ERROR_NOMEM if allocation fails
  */
-static inline int ds_bintree_delete(struct ds_bintree_head __arena *head, struct ds_kv kv)
+static inline int ds_bintree_delete_lkmm(struct ds_bintree_head __arena *head, struct ds_kv kv)
 {
 	struct bintree_search_result res;
 	struct ds_bintree_update_desc __arena *pOp;
@@ -807,7 +807,7 @@ static inline int ds_bintree_delete(struct ds_bintree_head __arena *head, struct
 	
 	while (iterations < BINTREE_MAX_DEPTH && can_loop) {
 		/* Search for key */
-		bintree_search(head, kv.key, &res);
+		bintree_search_lkmm(head, kv.key, &res);
 		
 		/* Validate search result - check for backoff conditions */
 		if (!res.pParent || !res.pLeaf || !res.pGrandParent || bintree_is_internal((struct ds_bintree_tree_node __arena *)res.pLeaf)) {
@@ -877,7 +877,7 @@ static inline int ds_bintree_delete(struct ds_bintree_head __arena *head, struct
 		if (res_cas == bintree_get_ptr(res.updGrandParent)) {
 			/* Success! Try to complete deletion */
 			cast_kern(pOp);
-			if (bintree_help_delete(pOp)) {
+			if (bintree_help_delete_lkmm(pOp)) {
 				arena_atomic_dec(&head->count);
 				return DS_SUCCESS;
 			}
@@ -903,7 +903,7 @@ static inline int ds_bintree_delete(struct ds_bintree_head __arena *head, struct
  * 
  * Returns: DS_SUCCESS if found, DS_ERROR_NOT_FOUND otherwise
  */
-static inline int ds_bintree_search(struct ds_bintree_head __arena *head, struct ds_kv kv)
+static inline int ds_bintree_search_lkmm(struct ds_bintree_head __arena *head, struct ds_kv kv)
 {
 	struct bintree_search_result res;
 	
@@ -911,7 +911,7 @@ static inline int ds_bintree_search(struct ds_bintree_head __arena *head, struct
 	if (!head)
 		return DS_ERROR_INVALID;
 	
-	bintree_search(head, kv.key, &res);
+	bintree_search_lkmm(head, kv.key, &res);
 	
 	/* Check if search was successful */
 	if (!res.pLeaf)
@@ -936,7 +936,7 @@ static inline int ds_bintree_search(struct ds_bintree_head __arena *head, struct
  * 
  * Returns: DS_SUCCESS if valid, DS_ERROR_CORRUPT otherwise
  */
-static inline int ds_bintree_verify(struct ds_bintree_head __arena *head)
+static inline int ds_bintree_verify_lkmm(struct ds_bintree_head __arena *head)
 {
 	/* Simple verification - check that we can traverse and count leaves */
 	struct ds_bintree_internal __arena *stack[BINTREE_MAX_DEPTH];
@@ -1000,6 +1000,621 @@ static inline int ds_bintree_verify(struct ds_bintree_head __arena *head)
 		return DS_ERROR_CORRUPT;
 	
 	return DS_SUCCESS;
+}
+
+#ifndef __BPF__
+static inline struct ds_bintree_tree_node __arena *bintree_get_child_c(
+	struct ds_bintree_internal __arena *node, bool bRight, enum ds_bintree_mo mo)
+{
+	if (mo == BINTREE_RELAXED)
+		return bRight ? arena_atomic_load(&node->pRight, ARENA_RELAXED)
+			      : arena_atomic_load(&node->pLeft, ARENA_RELAXED);
+
+	return bRight ? arena_atomic_load(&node->pRight, ARENA_ACQUIRE)
+		      : arena_atomic_load(&node->pLeft, ARENA_ACQUIRE);
+}
+
+static inline unsigned int bintree_get_infinite_key_c(struct ds_bintree_tree_node __arena *node)
+{
+	return arena_atomic_load(&node->type, ARENA_ACQUIRE) & BINTREE_NODE_KEY_INFINITE;
+}
+
+static inline void bintree_set_infinite_key_c(struct ds_bintree_tree_node __arena *node, int nInf)
+{
+	unsigned int nFlags = arena_atomic_load(&node->type, ARENA_RELAXED);
+
+	nFlags &= ~BINTREE_NODE_KEY_INFINITE;
+	switch (nInf) {
+	case 1:
+		nFlags |= BINTREE_NODE_KEY_INF1;
+		break;
+	case 2:
+		nFlags |= BINTREE_NODE_KEY_INF2;
+		break;
+	case 0:
+		break;
+	default:
+		break;
+	}
+
+	arena_atomic_store(&node->type, nFlags, ARENA_RELEASE);
+}
+
+static __always_inline bool bintree_search_c(struct ds_bintree_head __arena *head, __u64 key,
+					      struct bintree_search_result *res)
+{
+	struct ds_bintree_internal __arena *pParent;
+	struct ds_bintree_internal __arena *pGrandParent = NULL;
+	struct ds_bintree_tree_node __arena *pLeaf;
+	struct ds_bintree_update_desc __arena *updParent;
+	struct ds_bintree_update_desc __arena *updGrandParent;
+	bool bRightLeaf;
+	int iterations = 0;
+	bool nCmp = 0;
+
+	pParent = NULL;
+	cast_kern(head);
+	pLeaf = (struct ds_bintree_tree_node __arena *)head->root;
+	cast_kern(pLeaf);
+
+	updParent = NULL;
+	bRightLeaf = false;
+
+	while (bintree_is_internal(pLeaf) && iterations < BINTREE_MAX_DEPTH && can_loop) {
+		pGrandParent = pParent;
+		pParent = (struct ds_bintree_internal __arena *)pLeaf;
+		updGrandParent = updParent;
+
+		cast_kern(pParent);
+		updParent = (struct ds_bintree_update_desc __arena *)
+			arena_atomic_load(&pParent->m_pUpdate, ARENA_ACQUIRE);
+
+		__u64 state = bintree_get_bits((__u64)updParent);
+		if (state == BINTREE_DFLAG || state == BINTREE_MARK) {
+			iterations++;
+			cast_user(pParent);
+			break;
+		}
+
+		if (key < pParent->key.key) {
+			pLeaf = bintree_get_child_c(pParent, false, BINTREE_ACQUIRE);
+			bRightLeaf = false;
+		} else {
+			pLeaf = bintree_get_child_c(pParent, true, BINTREE_ACQUIRE);
+			bRightLeaf = true;
+		}
+
+		cast_user(pParent);
+		iterations++;
+	}
+
+	nCmp = (key == ((struct ds_bintree_leaf __arena *)pLeaf)->kv.key);
+
+	res->pGrandParent = pGrandParent;
+	res->pParent = pParent;
+	res->pLeaf = (struct ds_bintree_leaf __arena *)pLeaf;
+	res->updParent = (__u64)updParent;
+	res->updGrandParent = (__u64)updGrandParent;
+	res->bRightLeaf = bRightLeaf;
+
+	return nCmp;
+}
+
+static inline void bintree_cas_child_c(struct ds_bintree_internal __arena *parent,
+					void __arena *old_node,
+					void __arena *new_node)
+{
+	struct ds_bintree_tree_node __arena *new_h;
+	__u64 new_key;
+
+	cast_kern(parent);
+	cast_kern(new_node);
+	new_h = (struct ds_bintree_tree_node __arena *)new_node;
+
+	if (new_h->type == BINTREE_NODE_LEAF)
+		new_key = ((struct ds_bintree_leaf __arena *)new_node)->kv.key;
+	else
+		new_key = ((struct ds_bintree_internal __arena *)new_node)->key.key;
+
+	if (new_key < parent->key.key) {
+		arena_atomic_cmpxchg(&parent->pLeft, old_node, new_node,
+					     ARENA_ACQ_REL, ARENA_ACQUIRE);
+	} else {
+		arena_atomic_cmpxchg(&parent->pRight, old_node, new_node,
+					     ARENA_ACQ_REL, ARENA_ACQUIRE);
+	}
+}
+
+static inline void bintree_help_insert_c(struct ds_bintree_update_desc __arena *op)
+{
+	cast_kern(op);
+
+	struct ds_bintree_tree_node __arena *pLeaf =
+		(struct ds_bintree_tree_node __arena *)op->insert->pLeaf;
+
+	if (op->insert->bRightLeaf) {
+		arena_atomic_cmpxchg(&op->insert->pParent->pRight, pLeaf, op->insert->pNew,
+					     ARENA_RELEASE, ARENA_RELAXED);
+	} else {
+		arena_atomic_cmpxchg(&op->insert->pParent->pLeft, pLeaf, op->insert->pNew,
+					     ARENA_RELEASE, ARENA_RELAXED);
+	}
+
+	__u64 expected = bintree_make_update(op, BINTREE_IFLAG);
+	__u64 clean = bintree_make_update(op, BINTREE_CLEAN);
+	arena_atomic_cmpxchg(&op->insert->pParent->m_pUpdate, expected, clean,
+			     ARENA_RELEASE, ARENA_RELAXED);
+}
+
+static inline void bintree_help_marked_c(struct ds_bintree_update_desc __arena *op)
+{
+	struct ds_bintree_internal __arena *p;
+	void __arena *sibling;
+	void __arena *right_child;
+
+	cast_kern(op);
+	p = op->delete->pParent;
+	cast_kern(p);
+
+	right_child = arena_atomic_load(&p->pRight, ARENA_ACQUIRE);
+
+	if (right_child == (void __arena *)op->delete->pLeaf)
+		sibling = arena_atomic_load(&p->pLeft, ARENA_ACQUIRE);
+	else
+		sibling = right_child;
+
+	bintree_cas_child_c(op->delete->pGrandParent, p, sibling);
+
+	__u64 expected = bintree_make_update(op, BINTREE_DFLAG);
+	__u64 clean = bintree_make_update(op, BINTREE_CLEAN);
+
+	cast_kern(op->delete->pGrandParent);
+	arena_atomic_cmpxchg(&op->delete->pGrandParent->m_pUpdate, expected, clean,
+			     ARENA_RELEASE, ARENA_RELAXED);
+}
+
+static inline bool bintree_help_delete_c(struct ds_bintree_update_desc __arena *op)
+{
+	__u64 expected;
+	__u64 marked_val;
+	__u64 res;
+
+	cast_kern(op);
+	expected = op->delete->pUpdateParent;
+	marked_val = bintree_make_update(op, BINTREE_MARK);
+
+	cast_kern(op->delete->pParent);
+	res = arena_atomic_cmpxchg(&op->delete->pParent->m_pUpdate, expected, marked_val,
+				   ARENA_ACQ_REL, ARENA_RELAXED);
+
+	if (res == expected || res == marked_val) {
+		bintree_help_marked_c(op);
+		return true;
+	}
+
+	__u64 gp_expected = bintree_make_update(op, BINTREE_DFLAG);
+	__u64 gp_clean = bintree_make_update(op, BINTREE_CLEAN);
+
+	cast_kern(op->delete->pGrandParent);
+	arena_atomic_cmpxchg(&op->delete->pGrandParent->m_pUpdate, gp_expected, gp_clean,
+			     ARENA_RELEASE, ARENA_RELAXED);
+
+	return false;
+}
+
+static inline void bintree_help_c(__u64 update)
+{
+	void __arena *info = (void __arena *)bintree_get_ptr(update);
+	int state = bintree_get_bits(update);
+
+	if (!info)
+		return;
+
+	cast_kern(info);
+
+	if (state == BINTREE_IFLAG)
+		bintree_help_insert_c(info);
+	else if (state == BINTREE_MARK)
+		bintree_help_marked_c(info);
+	else if (state == BINTREE_DFLAG)
+		bintree_help_delete_c(info);
+}
+
+static inline int ds_bintree_init_c(struct ds_bintree_head __arena *head)
+{
+	struct ds_bintree_leaf __arena *leaf1, *leaf2;
+	struct ds_bintree_internal __arena *root;
+
+	cast_user(head);
+	if (!head)
+		return DS_ERROR_INVALID;
+
+	leaf1 = (struct ds_bintree_leaf __arena *)bpf_arena_alloc(sizeof(*leaf1));
+	if (!leaf1)
+		return DS_ERROR_NOMEM;
+
+	leaf2 = (struct ds_bintree_leaf __arena *)bpf_arena_alloc(sizeof(*leaf2));
+	if (!leaf2) {
+		bpf_arena_free(leaf1);
+		return DS_ERROR_NOMEM;
+	}
+
+	root = (struct ds_bintree_internal __arena *)bpf_arena_alloc(sizeof(*root));
+	if (!root) {
+		bpf_arena_free(leaf1);
+		bpf_arena_free(leaf2);
+		return DS_ERROR_NOMEM;
+	}
+
+	cast_kern(leaf1);
+	cast_kern(leaf2);
+	cast_kern(root);
+
+	leaf1->header.type = BINTREE_NODE_LEAF;
+	leaf1->kv.key = BINTREE_SENTINEL_KEY1;
+	leaf1->kv.value = 0;
+
+	leaf2->header.type = BINTREE_NODE_LEAF;
+	leaf2->kv.key = BINTREE_SENTINEL_KEY2;
+	leaf2->kv.value = 0;
+
+	root->header.type = BINTREE_NODE_INTERNAL;
+	root->key.key = BINTREE_SENTINEL_KEY2;
+
+	cast_user(leaf1);
+	cast_user(leaf2);
+	arena_atomic_store(&root->pLeft, (struct ds_bintree_tree_node __arena *)leaf1, ARENA_RELAXED);
+	arena_atomic_store(&root->pRight, (struct ds_bintree_tree_node __arena *)leaf2, ARENA_RELAXED);
+	arena_atomic_store(&root->m_pUpdate, bintree_make_update(NULL, BINTREE_CLEAN), ARENA_RELAXED);
+
+	cast_user(root);
+	head->root = root;
+	head->count = 0;
+
+	return DS_SUCCESS;
+}
+
+static inline int ds_bintree_insert_c(struct ds_bintree_head __arena *head, struct ds_kv kv)
+{
+	struct bintree_search_result res;
+	struct ds_bintree_leaf __arena *new_leaf;
+	struct ds_bintree_internal __arena *new_internal;
+	struct ds_bintree_update_desc __arena *pOp;
+	int iterations = 0;
+
+	cast_kern(head);
+	if (!head)
+		return DS_ERROR_INVALID;
+
+	if (kv.key >= BINTREE_SENTINEL_KEY1) {
+		head->stats.insert_failure_invalid_key++;
+		return DS_ERROR_INVALID;
+	}
+
+	while (iterations < BINTREE_MAX_DEPTH && can_loop) {
+		if (bintree_search_c(head, kv.key, &res)) {
+			cast_kern(res);
+			cast_kern(res.pLeaf);
+			arena_atomic_store(&res.pLeaf->kv.value, kv.value, ARENA_RELEASE);
+			head->stats.insert_into_updates++;
+			return DS_SUCCESS;
+		}
+
+		if (!res.pParent) {
+			head->stats.insert_failure_no_parent++;
+			return DS_ERROR_BUSY;
+		}
+
+		if (!res.pLeaf) {
+			head->stats.insert_failure_no_leaf++;
+			return DS_ERROR_BUSY;
+		}
+
+		if (bintree_get_bits(res.updParent) != BINTREE_CLEAN ||
+		    bintree_get_bits(res.updGrandParent) != BINTREE_CLEAN) {
+			head->stats.insert_retry_didnt_help++;
+			iterations++;
+			continue;
+		}
+
+		if (bintree_get_child_c(res.pParent, res.bRightLeaf, BINTREE_RELAXED) ==
+		    (struct ds_bintree_tree_node __arena *)res.pLeaf) {
+			new_leaf = (struct ds_bintree_leaf __arena *)bpf_arena_alloc(sizeof(*new_leaf));
+			if (!new_leaf) {
+				head->stats.insert_failure_nomem++;
+				return DS_ERROR_NOMEM;
+			}
+
+			new_internal = (struct ds_bintree_internal __arena *)bpf_arena_alloc(sizeof(*new_internal));
+			if (!new_internal) {
+				bpf_arena_free(new_leaf);
+				head->stats.insert_failure_nomem++;
+				return DS_ERROR_NOMEM;
+			}
+
+			new_leaf->header.type = BINTREE_NODE_LEAF;
+			new_leaf->kv.key = kv.key;
+			new_leaf->kv.value = kv.value;
+
+			new_internal->header.type = BINTREE_NODE_INTERNAL;
+			new_internal->m_pUpdate = bintree_make_update(NULL, BINTREE_CLEAN);
+
+			bool bNewKeyIsLess = (kv.key < res.pLeaf->kv.key);
+			if (bNewKeyIsLess) {
+				if (res.pGrandParent) {
+					bintree_set_infinite_key_c(&new_internal->header, 0);
+					new_internal->key.key = res.pLeaf->kv.key;
+				} else {
+					bintree_set_infinite_key_c(&new_internal->header, 1);
+				}
+				arena_atomic_store(&new_internal->pLeft, &new_leaf->header, ARENA_RELAXED);
+				arena_atomic_store(&new_internal->pRight, &res.pLeaf->header, ARENA_RELAXED);
+			} else {
+				bintree_set_infinite_key_c(&new_internal->header, 0);
+				new_internal->key.key = kv.key;
+				arena_atomic_store(&new_internal->pLeft, &res.pLeaf->header, ARENA_RELAXED);
+				arena_atomic_store(&new_internal->pRight, &new_leaf->header, ARENA_RELAXED);
+			}
+
+			pOp = (struct ds_bintree_update_desc __arena *)bpf_arena_alloc(sizeof(*pOp));
+			if (!pOp) {
+				bpf_arena_free(new_leaf);
+				bpf_arena_free(new_internal);
+				head->stats.insert_failure_nomem++;
+				return DS_ERROR_NOMEM;
+			}
+
+			struct ds_bintree_iinfo __arena *iinfo =
+				(struct ds_bintree_iinfo __arena *)bpf_arena_alloc(sizeof(*iinfo));
+			if (!iinfo) {
+				bpf_arena_free(pOp);
+				bpf_arena_free(new_leaf);
+				bpf_arena_free(new_internal);
+				head->stats.insert_failure_nomem++;
+				return DS_ERROR_NOMEM;
+			}
+
+			iinfo->pParent = res.pParent;
+			iinfo->pNew = new_internal;
+			iinfo->pLeaf = res.pLeaf;
+			iinfo->bRightLeaf = res.bRightLeaf;
+			pOp->insert = iinfo;
+
+			__u64 expected = (__u64)bintree_get_ptr(res.updParent);
+			__u64 desired = (__u64)bintree_make_update(pOp, BINTREE_IFLAG);
+
+			__u64 cas_result = arena_atomic_cmpxchg(&res.pParent->m_pUpdate, expected, desired,
+							 ARENA_ACQ_REL, ARENA_ACQUIRE);
+			if (cas_result == expected) {
+				bintree_help_insert_c(pOp);
+				arena_atomic_inc(&head->count);
+				head->stats.total_inserts++;
+				return DS_SUCCESS;
+			}
+
+			bpf_arena_free(iinfo);
+			bpf_arena_free(pOp);
+			bpf_arena_free(new_leaf);
+			bpf_arena_free(new_internal);
+			head->stats.insert_retry_didnt_help++;
+		}
+
+		iterations++;
+	}
+
+	head->stats.insert_failure_busy++;
+	return DS_ERROR_BUSY;
+}
+
+static inline int ds_bintree_delete_c(struct ds_bintree_head __arena *head, struct ds_kv kv)
+{
+	struct bintree_search_result res;
+	struct ds_bintree_update_desc __arena *pOp;
+	__u64 new_up;
+	__u64 res_cas;
+	int iterations = 0;
+
+	cast_kern(head);
+	if (!head)
+		return DS_ERROR_INVALID;
+
+	while (iterations < BINTREE_MAX_DEPTH && can_loop) {
+		bintree_search_c(head, kv.key, &res);
+
+		if (!res.pParent || !res.pLeaf || !res.pGrandParent ||
+		    bintree_is_internal((struct ds_bintree_tree_node __arena *)res.pLeaf)) {
+			head->stats.delete_failure_busy++;
+			return DS_ERROR_BUSY;
+		}
+
+		cast_kern(res.pLeaf);
+		if (res.pLeaf->kv.key != kv.key) {
+			head->stats.delete_failure_not_found++;
+			return DS_ERROR_NOT_FOUND;
+		}
+
+		if (bintree_get_bits(res.updGrandParent) != BINTREE_CLEAN) {
+			iterations++;
+			head->stats.delete_retry_didnt_help_gp++;
+			continue;
+		}
+
+		if (bintree_get_bits(res.updParent) != BINTREE_CLEAN) {
+			iterations++;
+			head->stats.delete_retry_didnt_help_p++;
+			continue;
+		}
+
+		pOp = bpf_arena_alloc(sizeof(*pOp));
+		if (!pOp) {
+			head->stats.delete_failure_nomem++;
+			return DS_ERROR_NOMEM;
+		}
+
+		struct ds_bintree_dinfo __arena *dinfo = bpf_arena_alloc(sizeof(*dinfo));
+		if (!dinfo) {
+			head->stats.delete_failure_nomem++;
+			bpf_arena_free(pOp);
+			return DS_ERROR_NOMEM;
+		}
+
+		dinfo->pGrandParent = res.pGrandParent;
+		dinfo->pParent = res.pParent;
+		dinfo->pLeaf = res.pLeaf;
+		dinfo->bDisposeLeaf = true;
+		dinfo->pUpdateParent = bintree_get_ptr(res.updParent);
+		dinfo->bRightLeaf = res.bRightLeaf;
+		pOp->delete = dinfo;
+
+		cast_user(pOp);
+		new_up = bintree_make_update(pOp, BINTREE_DFLAG);
+
+		cast_kern(res.pGrandParent);
+		res_cas = arena_atomic_cmpxchg(&res.pGrandParent->m_pUpdate,
+					       bintree_get_ptr(res.updGrandParent), new_up,
+					       ARENA_ACQ_REL, ARENA_RELAXED);
+
+		if (res_cas == bintree_get_ptr(res.updGrandParent)) {
+			cast_kern(pOp);
+			if (bintree_help_delete_c(pOp)) {
+				arena_atomic_dec(&head->count);
+				return DS_SUCCESS;
+			}
+		} else {
+			bpf_arena_free(dinfo);
+			bpf_arena_free(pOp);
+		}
+
+		iterations++;
+	}
+
+	head->stats.delete_failure_busy++;
+	return DS_ERROR_BUSY;
+}
+
+static inline int ds_bintree_search_c(struct ds_bintree_head __arena *head, struct ds_kv kv)
+{
+	struct bintree_search_result res;
+
+	cast_kern(head);
+	if (!head)
+		return DS_ERROR_INVALID;
+
+	bintree_search_c(head, kv.key, &res);
+
+	if (!res.pLeaf)
+		return DS_ERROR_NOT_FOUND;
+
+	cast_kern(res.pLeaf);
+	if (res.pLeaf->kv.key == kv.key)
+		return DS_SUCCESS;
+
+	return DS_ERROR_NOT_FOUND;
+}
+
+static inline int ds_bintree_verify_c(struct ds_bintree_head __arena *head)
+{
+	struct ds_bintree_internal __arena *stack[BINTREE_MAX_DEPTH];
+	int stack_top = 0;
+	__u64 leaf_count = 0;
+	int iterations = 0;
+
+	cast_kern(head);
+	if (!head || !head->root)
+		return DS_ERROR_INVALID;
+
+	cast_kern(head->root);
+	stack[stack_top++] = head->root;
+
+	while (stack_top > 0 && iterations < BINTREE_MAX_DEPTH * 4 && can_loop) {
+		struct ds_bintree_internal __arena *node;
+		void __arena *left_ptr, *right_ptr;
+		struct ds_bintree_tree_node __arena *left_h, *right_h;
+
+		node = stack[--stack_top];
+		cast_kern(node);
+
+		left_ptr = arena_atomic_load(&node->pLeft, ARENA_RELAXED);
+		right_ptr = arena_atomic_load(&node->pRight, ARENA_RELAXED);
+
+		if (!left_ptr || !right_ptr)
+			return DS_ERROR_CORRUPT;
+
+		cast_kern(left_ptr);
+		cast_kern(right_ptr);
+
+		left_h = (struct ds_bintree_tree_node __arena *)left_ptr;
+		right_h = (struct ds_bintree_tree_node __arena *)right_ptr;
+
+		if (left_h->type == BINTREE_NODE_LEAF) {
+			struct ds_bintree_leaf __arena *leaf = (struct ds_bintree_leaf __arena *)left_ptr;
+			if (leaf->kv.key < BINTREE_SENTINEL_KEY1)
+				leaf_count++;
+		} else if (stack_top < BINTREE_MAX_DEPTH - 1) {
+			stack[stack_top++] = (struct ds_bintree_internal __arena *)left_ptr;
+		}
+
+		if (right_h->type == BINTREE_NODE_LEAF) {
+			struct ds_bintree_leaf __arena *leaf = (struct ds_bintree_leaf __arena *)right_ptr;
+			if (leaf->kv.key < BINTREE_SENTINEL_KEY1)
+				leaf_count++;
+		} else if (stack_top < BINTREE_MAX_DEPTH - 1) {
+			stack[stack_top++] = (struct ds_bintree_internal __arena *)right_ptr;
+		}
+
+		iterations++;
+	}
+
+	if (leaf_count != head->count)
+		return DS_ERROR_CORRUPT;
+
+	return DS_SUCCESS;
+}
+#endif
+
+static inline int ds_bintree_init(struct ds_bintree_head __arena *head)
+{
+#ifdef __BPF__
+	return ds_bintree_init_lkmm(head);
+#else
+	return ds_bintree_init_c(head);
+#endif
+}
+
+static inline int ds_bintree_insert(struct ds_bintree_head __arena *head, struct ds_kv kv)
+{
+#ifdef __BPF__
+	return ds_bintree_insert_lkmm(head, kv);
+#else
+	return ds_bintree_insert_c(head, kv);
+#endif
+}
+
+static inline int ds_bintree_delete(struct ds_bintree_head __arena *head, struct ds_kv kv)
+{
+#ifdef __BPF__
+	return ds_bintree_delete_lkmm(head, kv);
+#else
+	return ds_bintree_delete_c(head, kv);
+#endif
+}
+
+static inline int ds_bintree_search(struct ds_bintree_head __arena *head, struct ds_kv kv)
+{
+#ifdef __BPF__
+	return ds_bintree_search_lkmm(head, kv);
+#else
+	return ds_bintree_search_c(head, kv);
+#endif
+}
+
+static inline int ds_bintree_verify(struct ds_bintree_head __arena *head)
+{
+#ifdef __BPF__
+	return ds_bintree_verify_lkmm(head);
+#else
+	return ds_bintree_verify_c(head);
+#endif
 }
 
 /**

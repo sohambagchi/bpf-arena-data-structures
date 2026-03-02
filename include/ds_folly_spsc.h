@@ -76,7 +76,7 @@ typedef struct ds_spsc_queue_head __arena ds_spsc_queue_head_t;
  * Returns: DS_SUCCESS or DS_ERROR_*
  */
 static inline __attribute__((unused))
-int ds_spsc_init(struct ds_spsc_queue_head __arena *head, __u32 size)
+int ds_spsc_init_lkmm(struct ds_spsc_queue_head __arena *head, __u32 size)
 {
 	struct ds_kv __arena *records;
 	
@@ -105,6 +105,43 @@ int ds_spsc_init(struct ds_spsc_queue_head __arena *head, __u32 size)
 	return DS_SUCCESS;
 }
 
+#ifndef __BPF__
+static inline __attribute__((unused))
+int ds_spsc_init_c(struct ds_spsc_queue_head __arena *head, __u32 size)
+{
+	struct ds_kv __arena *records;
+
+	cast_kern(head);
+	if (size < 2)
+		return DS_ERROR_INVALID;
+
+	records = bpf_arena_alloc(size * sizeof(struct ds_kv));
+	if (!records)
+		return DS_ERROR_NOMEM;
+
+	cast_kern(records);
+
+	arena_atomic_store(&head->size, size, ARENA_RELAXED);
+	arena_atomic_store(&head->read_idx.idx, 0, ARENA_RELAXED);
+	arena_atomic_store(&head->write_idx.idx, 0, ARENA_RELAXED);
+
+	cast_user(records);
+	arena_atomic_store(&head->records, records, ARENA_RELAXED);
+
+	return DS_SUCCESS;
+}
+#endif
+
+static inline __attribute__((unused))
+int ds_spsc_init(struct ds_spsc_queue_head __arena *head, __u32 size)
+{
+#ifdef __BPF__
+	return ds_spsc_init_lkmm(head, size);
+#else
+	return ds_spsc_init_c(head, size);
+#endif
+}
+
 /**
  * ds_spsc_insert - Insert element into queue (PRODUCER ONLY)
  * @head: Queue head
@@ -117,7 +154,7 @@ int ds_spsc_init(struct ds_spsc_queue_head __arena *head, __u32 size)
  * Returns: DS_SUCCESS or DS_ERROR_FULL
  */
 static inline __attribute__((unused))
-int ds_spsc_insert(struct ds_spsc_queue_head __arena *head, __u64 key, __u64 value)
+int ds_spsc_insert_lkmm(struct ds_spsc_queue_head __arena *head, __u64 key, __u64 value)
 {
 	cast_kern(head);
 	
@@ -150,6 +187,43 @@ int ds_spsc_insert(struct ds_spsc_queue_head __arena *head, __u64 key, __u64 val
 	return DS_ERROR_FULL;
 }
 
+#ifndef __BPF__
+static inline __attribute__((unused))
+int ds_spsc_insert_c(struct ds_spsc_queue_head __arena *head, __u64 key, __u64 value)
+{
+	cast_kern(head);
+
+	__u32 current_write = arena_atomic_load(&head->write_idx.idx, ARENA_RELAXED);
+	__u32 next_record = current_write + 1;
+	if (next_record >= head->size)
+		next_record = 0;
+
+	__u32 current_read = arena_atomic_load(&head->read_idx.idx, ARENA_ACQUIRE);
+
+	if (next_record != current_read) {
+		struct ds_kv __arena *node = &head->records[current_write];
+		cast_kern(node);
+
+		arena_atomic_store(&node->key, key, ARENA_RELAXED);
+		arena_atomic_store(&node->value, value, ARENA_RELAXED);
+		arena_atomic_store(&head->write_idx.idx, next_record, ARENA_RELEASE);
+		return DS_SUCCESS;
+	}
+
+	return DS_ERROR_FULL;
+}
+#endif
+
+static inline __attribute__((unused))
+int ds_spsc_insert(struct ds_spsc_queue_head __arena *head, __u64 key, __u64 value)
+{
+#ifdef __BPF__
+	return ds_spsc_insert_lkmm(head, key, value);
+#else
+	return ds_spsc_insert_c(head, key, value);
+#endif
+}
+
 /**
  * ds_spsc_delete - Dequeue element from queue (CONSUMER ONLY)
  * @head: Queue head
@@ -164,7 +238,7 @@ int ds_spsc_insert(struct ds_spsc_queue_head __arena *head, __u64 key, __u64 val
  * Returns: DS_SUCCESS or DS_ERROR_NOT_FOUND (empty)
  */
 static inline __attribute__((unused))
-int ds_spsc_delete(struct ds_spsc_queue_head __arena *head, struct ds_kv *data)
+int ds_spsc_delete_lkmm(struct ds_spsc_queue_head __arena *head, struct ds_kv *data)
 {
 	cast_kern(head);
 
@@ -198,13 +272,69 @@ int ds_spsc_delete(struct ds_spsc_queue_head __arena *head, struct ds_kv *data)
 	return DS_SUCCESS;
 }
 
+#ifndef __BPF__
+static inline __attribute__((unused))
+int ds_spsc_delete_c(struct ds_spsc_queue_head __arena *head, struct ds_kv *data)
+{
+	cast_kern(head);
+
+	__u32 current_read = arena_atomic_load(&head->read_idx.idx, ARENA_RELAXED);
+	__u32 current_write = arena_atomic_load(&head->write_idx.idx, ARENA_ACQUIRE);
+
+	if (current_read == current_write)
+		return DS_ERROR_NOT_FOUND;
+
+	struct ds_kv __arena *node = &head->records[current_read];
+	cast_kern(node);
+	if (data) {
+		data->key = arena_atomic_load(&node->key, ARENA_RELAXED);
+		data->value = arena_atomic_load(&node->value, ARENA_RELAXED);
+	}
+
+	__u32 next_record = current_read + 1;
+	if (next_record >= head->size)
+		next_record = 0;
+
+	arena_atomic_store(&head->read_idx.idx, next_record, ARENA_RELEASE);
+	return DS_SUCCESS;
+}
+#endif
+
+static inline __attribute__((unused))
+int ds_spsc_delete(struct ds_spsc_queue_head __arena *head, struct ds_kv *data)
+{
+#ifdef __BPF__
+	return ds_spsc_delete_lkmm(head, data);
+#else
+	return ds_spsc_delete_c(head, data);
+#endif
+}
+
 /**
  * ds_spsc_pop - Alias for ds_spsc_delete for API compatibility
  */
 static inline __attribute__((unused))
+int ds_spsc_pop_lkmm(struct ds_spsc_queue_head __arena *head, struct ds_kv *data)
+{
+	return ds_spsc_delete_lkmm(head, data);
+}
+
+#ifndef __BPF__
+static inline __attribute__((unused))
+int ds_spsc_pop_c(struct ds_spsc_queue_head __arena *head, struct ds_kv *data)
+{
+	return ds_spsc_delete_c(head, data);
+}
+#endif
+
+static inline __attribute__((unused))
 int ds_spsc_pop(struct ds_spsc_queue_head __arena *head, struct ds_kv *data)
 {
-	return ds_spsc_delete(head, data);
+#ifdef __BPF__
+	return ds_spsc_pop_lkmm(head, data);
+#else
+	return ds_spsc_pop_c(head, data);
+#endif
 }
 
 /**
@@ -218,12 +348,32 @@ int ds_spsc_pop(struct ds_spsc_queue_head __arena *head, struct ds_kv *data)
  * Returns: DS_ERROR_INVALID (unsupported operation)
  */
 static inline __attribute__((unused))
-int ds_spsc_search(struct ds_spsc_queue_head __arena *head, __u64 key)
+int ds_spsc_search_lkmm(struct ds_spsc_queue_head __arena *head, __u64 key)
 {
 	/* Search is not practical for SPSC queue - it's a FIFO structure */
 	(void)head;
 	(void)key;
 	return DS_ERROR_INVALID;
+}
+
+#ifndef __BPF__
+static inline __attribute__((unused))
+int ds_spsc_search_c(struct ds_spsc_queue_head __arena *head, __u64 key)
+{
+	(void)head;
+	(void)key;
+	return DS_ERROR_INVALID;
+}
+#endif
+
+static inline __attribute__((unused))
+int ds_spsc_search(struct ds_spsc_queue_head __arena *head, __u64 key)
+{
+#ifdef __BPF__
+	return ds_spsc_search_lkmm(head, key);
+#else
+	return ds_spsc_search_c(head, key);
+#endif
 }
 
 /**
@@ -235,7 +385,7 @@ int ds_spsc_search(struct ds_spsc_queue_head __arena *head, __u64 key)
  * Returns: DS_SUCCESS or DS_ERROR_CORRUPT
  */
 static inline __attribute__((unused))
-int ds_spsc_verify(struct ds_spsc_queue_head __arena *head)
+int ds_spsc_verify_lkmm(struct ds_spsc_queue_head __arena *head)
 {
 	cast_kern(head);
 	
@@ -259,6 +409,40 @@ int ds_spsc_verify(struct ds_spsc_queue_head __arena *head)
 	return DS_SUCCESS;
 }
 
+#ifndef __BPF__
+static inline __attribute__((unused))
+int ds_spsc_verify_c(struct ds_spsc_queue_head __arena *head)
+{
+	cast_kern(head);
+
+	__u32 r = arena_atomic_load(&head->read_idx.idx, ARENA_RELAXED);
+	__u32 w = arena_atomic_load(&head->write_idx.idx, ARENA_RELAXED);
+	__u32 s = arena_atomic_load(&head->size, ARENA_RELAXED);
+
+	if (r >= s || w >= s)
+		return DS_ERROR_CORRUPT;
+
+	int size_guess = (int)w - (int)r;
+	if (size_guess < 0)
+		size_guess += s;
+
+	if (size_guess > (int)(s - 1))
+		return DS_ERROR_CORRUPT;
+
+	return DS_SUCCESS;
+}
+#endif
+
+static inline __attribute__((unused))
+int ds_spsc_verify(struct ds_spsc_queue_head __arena *head)
+{
+#ifdef __BPF__
+	return ds_spsc_verify_lkmm(head);
+#else
+	return ds_spsc_verify_c(head);
+#endif
+}
+
 /**
  * ds_spsc_size - Get current number of elements in queue
  * @head: Queue head
@@ -266,7 +450,7 @@ int ds_spsc_verify(struct ds_spsc_queue_head __arena *head)
  * Returns: Number of elements currently in queue
  */
 static inline __attribute__((unused))
-__u32 ds_spsc_size(struct ds_spsc_queue_head __arena *head)
+__u32 ds_spsc_size_lkmm(struct ds_spsc_queue_head __arena *head)
 {
 	cast_kern(head);
 	
@@ -281,6 +465,34 @@ __u32 ds_spsc_size(struct ds_spsc_queue_head __arena *head)
 	return (__u32)size;
 }
 
+#ifndef __BPF__
+static inline __attribute__((unused))
+__u32 ds_spsc_size_c(struct ds_spsc_queue_head __arena *head)
+{
+	cast_kern(head);
+
+	__u32 r = arena_atomic_load(&head->read_idx.idx, ARENA_RELAXED);
+	__u32 w = arena_atomic_load(&head->write_idx.idx, ARENA_RELAXED);
+	__u32 s = arena_atomic_load(&head->size, ARENA_RELAXED);
+
+	int size = (int)w - (int)r;
+	if (size < 0)
+		size += s;
+
+	return (__u32)size;
+}
+#endif
+
+static inline __attribute__((unused))
+__u32 ds_spsc_size(struct ds_spsc_queue_head __arena *head)
+{
+#ifdef __BPF__
+	return ds_spsc_size_lkmm(head);
+#else
+	return ds_spsc_size_c(head);
+#endif
+}
+
 /**
  * ds_spsc_is_empty - Check if queue is empty
  * @head: Queue head
@@ -288,7 +500,7 @@ __u32 ds_spsc_size(struct ds_spsc_queue_head __arena *head)
  * Returns: true if empty, false otherwise
  */
 static inline __attribute__((unused))
-bool ds_spsc_is_empty(struct ds_spsc_queue_head __arena *head)
+bool ds_spsc_is_empty_lkmm(struct ds_spsc_queue_head __arena *head)
 {
 	cast_kern(head);
 	
@@ -298,6 +510,29 @@ bool ds_spsc_is_empty(struct ds_spsc_queue_head __arena *head)
 	return r == w;
 }
 
+#ifndef __BPF__
+static inline __attribute__((unused))
+bool ds_spsc_is_empty_c(struct ds_spsc_queue_head __arena *head)
+{
+	cast_kern(head);
+
+	__u32 r = arena_atomic_load(&head->read_idx.idx, ARENA_RELAXED);
+	__u32 w = arena_atomic_load(&head->write_idx.idx, ARENA_RELAXED);
+
+	return r == w;
+}
+#endif
+
+static inline __attribute__((unused))
+bool ds_spsc_is_empty(struct ds_spsc_queue_head __arena *head)
+{
+#ifdef __BPF__
+	return ds_spsc_is_empty_lkmm(head);
+#else
+	return ds_spsc_is_empty_c(head);
+#endif
+}
+
 /**
  * ds_spsc_is_full - Check if queue is full
  * @head: Queue head
@@ -305,7 +540,7 @@ bool ds_spsc_is_empty(struct ds_spsc_queue_head __arena *head)
  * Returns: true if full, false otherwise
  */
 static inline __attribute__((unused))
-bool ds_spsc_is_full(struct ds_spsc_queue_head __arena *head)
+bool ds_spsc_is_full_lkmm(struct ds_spsc_queue_head __arena *head)
 {
 	cast_kern(head);
 	
@@ -318,4 +553,32 @@ bool ds_spsc_is_full(struct ds_spsc_queue_head __arena *head)
 		next_write = 0;
 	
 	return next_write == r;
+}
+
+#ifndef __BPF__
+static inline __attribute__((unused))
+bool ds_spsc_is_full_c(struct ds_spsc_queue_head __arena *head)
+{
+	cast_kern(head);
+
+	__u32 r = arena_atomic_load(&head->read_idx.idx, ARENA_ACQUIRE);
+	__u32 w = arena_atomic_load(&head->write_idx.idx, ARENA_RELAXED);
+	__u32 s = arena_atomic_load(&head->size, ARENA_RELAXED);
+
+	__u32 next_write = w + 1;
+	if (next_write >= s)
+		next_write = 0;
+
+	return next_write == r;
+}
+#endif
+
+static inline __attribute__((unused))
+bool ds_spsc_is_full(struct ds_spsc_queue_head __arena *head)
+{
+#ifdef __BPF__
+	return ds_spsc_is_full_lkmm(head);
+#else
+	return ds_spsc_is_full_c(head);
+#endif
 }

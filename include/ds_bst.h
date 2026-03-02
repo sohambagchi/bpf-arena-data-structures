@@ -92,7 +92,7 @@ struct bst_search_result {
 /**
  * bst_search - Search for a key in the tree (internal helper)
  */
-static inline void bst_search(
+static inline void bst_search_lkmm(
 	struct ds_bst_head __arena *head,
 	__u64 key,
 	struct bst_search_result *result)
@@ -166,7 +166,7 @@ static inline void bst_search(
  * 
  * Returns: DS_SUCCESS on success, DS_ERROR_NOMEM if allocation fails
  */
-static inline int ds_bst_init(struct ds_bst_head __arena *head)
+static inline int ds_bst_init_lkmm(struct ds_bst_head __arena *head)
 {
 	cast_kern(head);
 	
@@ -227,7 +227,7 @@ static inline int ds_bst_init(struct ds_bst_head __arena *head)
  *          DS_ERROR_INVALID if key exists or is invalid,
  *          DS_ERROR_NOMEM if allocation fails
  */
-static inline int ds_bst_insert(
+static inline int ds_bst_insert_lkmm(
 	struct ds_bst_head __arena *head,
 	__u64 key,
 	__u64 value)
@@ -245,7 +245,7 @@ static inline int ds_bst_insert(
 	__u64 retries = 0;
 	
 	while (retries < 100 && can_loop) {
-		bst_search(head, key, &result);
+		bst_search_lkmm(head, key, &result);
 		
 		/* Key already exists */
 		if (result.found) {
@@ -339,7 +339,7 @@ static inline int ds_bst_insert(
  * Returns: DS_SUCCESS if deleted,
  *          DS_ERROR_NOT_FOUND if key doesn't exist
  */
-static inline int ds_bst_delete(
+static inline int ds_bst_delete_lkmm(
 	struct ds_bst_head __arena *head,
 	__u64 key)
 {
@@ -352,7 +352,7 @@ static inline int ds_bst_delete(
 	__u64 retries = 0;
 	
 	while (retries < 100 && can_loop) {
-		bst_search(head, key, &result);
+		bst_search_lkmm(head, key, &result);
 		
 		/* Key not found */
 		if (!result.found)
@@ -411,7 +411,7 @@ static inline int ds_bst_delete(
  * 
  * Returns: DS_SUCCESS if found, DS_ERROR_NOT_FOUND otherwise
  */
-static inline int ds_bst_search(
+static inline int ds_bst_search_lkmm(
 	struct ds_bst_head __arena *head,
 	__u64 key)
 {
@@ -421,7 +421,7 @@ static inline int ds_bst_search(
 		return DS_ERROR_INVALID;
 	
 	struct bst_search_result result;
-	bst_search(head, key, &result);
+	bst_search_lkmm(head, key, &result);
 	
 	if (result.found)
 		return DS_SUCCESS;
@@ -440,7 +440,7 @@ static inline int ds_bst_search(
  *          DS_ERROR_INVALID if head or data is NULL,
  *          DS_ERROR_NOT_FOUND if tree is empty (only sentinels)
  */
-static inline int ds_bst_pop(struct ds_bst_head __arena *head, struct ds_kv *data)
+static inline int ds_bst_pop_lkmm(struct ds_bst_head __arena *head, struct ds_kv *data)
 {
 	cast_kern(head);
 	
@@ -490,7 +490,7 @@ static inline int ds_bst_pop(struct ds_bst_head __arena *head, struct ds_kv *dat
 	data->value = leaf->kv.value;
 	
 	/* Delete the leaf using the standard delete operation */
-	return ds_bst_delete(head, leaf->kv.key);
+	return ds_bst_delete_lkmm(head, leaf->kv.key);
 }
 
 /**
@@ -504,7 +504,7 @@ static inline int ds_bst_pop(struct ds_bst_head __arena *head, struct ds_kv *dat
  * 
  * Returns: DS_SUCCESS if valid, DS_ERROR_INVALID or DS_ERROR_CORRUPT otherwise
  */
-static inline int ds_bst_verify(struct ds_bst_head __arena *head)
+static inline int ds_bst_verify_lkmm(struct ds_bst_head __arena *head)
 {
 	cast_kern(head);
 	
@@ -597,7 +597,7 @@ static inline const struct ds_metadata* ds_bst_get_metadata(void)
  */
 typedef int (*ds_bst_iter_fn)(__u64 key, __u64 value, void *ctx);
 
-static inline __u64 ds_bst_iterate(struct ds_bst_head __arena *head,
+static inline __u64 ds_bst_iterate_lkmm(struct ds_bst_head __arena *head,
                                     ds_bst_iter_fn fn,
                                     void *ctx)
 {
@@ -657,4 +657,505 @@ static inline __u64 ds_bst_iterate(struct ds_bst_head __arena *head,
 	}
 	
 	return count;
+}
+
+#ifndef __BPF__
+static inline void bst_search_c(
+	struct ds_bst_head __arena *head,
+	__u64 key,
+	struct bst_search_result *result)
+{
+	struct bst_tree_node __arena *node;
+	struct bst_internal_node __arena *parent = NULL;
+	struct bst_internal_node __arena *grandparent = NULL;
+	__u8 parent_is_right = 0, leaf_is_right = 0;
+	__u64 iterations = 0;
+
+	if (!head || !result) {
+		if (result) {
+			result->found = 0;
+			result->leaf = NULL;
+		}
+		return;
+	}
+
+	cast_kern(head);
+	node = (struct bst_tree_node __arena *)head->root;
+
+	while (node && iterations < BST_MAX_RETRIES && can_loop) {
+		cast_kern(node);
+
+		if (node->is_leaf)
+			break;
+
+		struct bst_internal_node __arena *internal =
+			(struct bst_internal_node __arena *)node;
+
+		grandparent = parent;
+		parent_is_right = leaf_is_right;
+
+		parent = internal;
+		if (key < internal->routing_key.key) {
+			node = arena_atomic_load(&internal->left, ARENA_ACQUIRE);
+			leaf_is_right = 0;
+		} else {
+			node = arena_atomic_load(&internal->right, ARENA_ACQUIRE);
+			leaf_is_right = 1;
+		}
+
+		iterations++;
+	}
+
+	struct bst_leaf_node __arena *leaf = (struct bst_leaf_node __arena *)node;
+	cast_kern(leaf);
+
+	result->grandparent = grandparent;
+	result->parent = parent;
+	result->leaf = leaf;
+	result->parent_is_right = parent_is_right;
+	result->leaf_is_right = leaf_is_right;
+	result->found = (leaf && !leaf->base.infinite_key && leaf->kv.key == key);
+}
+
+static inline int ds_bst_init_c(struct ds_bst_head __arena *head)
+{
+	cast_kern(head);
+
+	if (!head)
+		return DS_ERROR_INVALID;
+
+	head->leaf_inf1 = bpf_arena_alloc(sizeof(struct bst_leaf_node));
+	head->leaf_inf2 = bpf_arena_alloc(sizeof(struct bst_leaf_node));
+	if (!head->leaf_inf1 || !head->leaf_inf2) {
+		if (head->leaf_inf1)
+			bpf_arena_free(head->leaf_inf1);
+		if (head->leaf_inf2)
+			bpf_arena_free(head->leaf_inf2);
+		return DS_ERROR_NOMEM;
+	}
+
+	cast_kern(head->leaf_inf1);
+	head->leaf_inf1->base.is_leaf = 1;
+	head->leaf_inf1->base.infinite_key = 1;
+	head->leaf_inf1->kv.key = ~0ULL - 1;
+	head->leaf_inf1->kv.value = 0;
+
+	cast_kern(head->leaf_inf2);
+	head->leaf_inf2->base.is_leaf = 1;
+	head->leaf_inf2->base.infinite_key = 2;
+	head->leaf_inf2->kv.key = ~0ULL;
+	head->leaf_inf2->kv.value = 0;
+
+	head->root = bpf_arena_alloc(sizeof(struct bst_internal_node));
+	if (!head->root) {
+		bpf_arena_free(head->leaf_inf1);
+		bpf_arena_free(head->leaf_inf2);
+		return DS_ERROR_NOMEM;
+	}
+
+	cast_kern(head->root);
+	head->root->base.is_leaf = 0;
+	head->root->base.infinite_key = 2;
+	head->root->routing_key.key = ~0ULL;
+	arena_atomic_store(&head->root->left,
+				 (struct bst_tree_node __arena *)head->leaf_inf1,
+				 ARENA_RELAXED);
+	arena_atomic_store(&head->root->right,
+				 (struct bst_tree_node __arena *)head->leaf_inf2,
+				 ARENA_RELEASE);
+
+	return DS_SUCCESS;
+}
+
+static inline int ds_bst_insert_c(
+	struct ds_bst_head __arena *head,
+	__u64 key,
+	__u64 value)
+{
+	cast_kern(head);
+
+	if (!head)
+		return DS_ERROR_INVALID;
+
+	if (key >= (~0ULL - 1))
+		return DS_ERROR_INVALID;
+
+	struct bst_search_result result;
+	__u64 retries = 0;
+
+	while (retries < 100 && can_loop) {
+		bst_search_c(head, key, &result);
+
+		if (result.found)
+			return DS_ERROR_INVALID;
+
+		if (!result.parent || !result.leaf) {
+			retries++;
+			continue;
+		}
+
+		struct bst_leaf_node __arena *new_leaf =
+			bpf_arena_alloc(sizeof(struct bst_leaf_node));
+		struct bst_internal_node __arena *new_internal =
+			bpf_arena_alloc(sizeof(struct bst_internal_node));
+
+		if (!new_leaf || !new_internal) {
+			if (new_leaf)
+				bpf_arena_free(new_leaf);
+			if (new_internal)
+				bpf_arena_free(new_internal);
+			return DS_ERROR_NOMEM;
+		}
+
+		cast_kern(new_leaf);
+		new_leaf->base.is_leaf = 1;
+		new_leaf->base.infinite_key = 0;
+		new_leaf->kv.key = key;
+		new_leaf->kv.value = value;
+
+		cast_kern(new_internal);
+		new_internal->base.is_leaf = 0;
+		new_internal->base.infinite_key = 0;
+
+		if (key < result.leaf->kv.key) {
+			new_internal->routing_key.key = result.leaf->kv.key;
+			arena_atomic_store(&new_internal->left,
+						 (struct bst_tree_node __arena *)new_leaf,
+						 ARENA_RELAXED);
+			arena_atomic_store(&new_internal->right,
+						 (struct bst_tree_node __arena *)result.leaf,
+						 ARENA_RELAXED);
+		} else {
+			new_internal->routing_key.key = key;
+			arena_atomic_store(&new_internal->left,
+						 (struct bst_tree_node __arena *)result.leaf,
+						 ARENA_RELAXED);
+			arena_atomic_store(&new_internal->right,
+						 (struct bst_tree_node __arena *)new_leaf,
+						 ARENA_RELAXED);
+		}
+
+		struct bst_tree_node __arena *old_child =
+			(struct bst_tree_node __arena *)result.leaf;
+		struct bst_tree_node __arena *new_child =
+			(struct bst_tree_node __arena *)new_internal;
+
+		cast_kern(result.parent);
+		cast_kern(new_child);
+
+		struct bst_tree_node __arena *prev;
+		if (result.leaf_is_right) {
+			prev = arena_atomic_cmpxchg(&result.parent->right, old_child, new_child,
+						    ARENA_RELEASE, ARENA_RELAXED);
+		} else {
+			prev = arena_atomic_cmpxchg(&result.parent->left, old_child, new_child,
+						    ARENA_RELEASE, ARENA_RELAXED);
+		}
+
+		if (prev == old_child)
+			return DS_SUCCESS;
+
+		bpf_arena_free(new_leaf);
+		bpf_arena_free(new_internal);
+		retries++;
+	}
+	return DS_ERROR_BUSY;
+}
+
+static inline int ds_bst_delete_c(
+	struct ds_bst_head __arena *head,
+	__u64 key)
+{
+	cast_kern(head);
+
+	if (!head)
+		return DS_ERROR_INVALID;
+
+	struct bst_search_result result;
+	__u64 retries = 0;
+
+	while (retries < 100 && can_loop) {
+		bst_search_c(head, key, &result);
+
+		if (!result.found)
+			return DS_ERROR_NOT_FOUND;
+
+		if (!result.grandparent || !result.parent || !result.leaf) {
+			retries++;
+			continue;
+		}
+
+		cast_kern(result.parent);
+		struct bst_tree_node __arena *sibling = result.leaf_is_right ?
+			arena_atomic_load(&result.parent->left, ARENA_ACQUIRE) :
+			arena_atomic_load(&result.parent->right, ARENA_ACQUIRE);
+
+		struct bst_tree_node __arena *old_child =
+			(struct bst_tree_node __arena *)result.parent;
+		struct bst_tree_node __arena *new_child = sibling;
+
+		cast_kern(result.grandparent);
+		cast_kern(new_child);
+
+		struct bst_tree_node __arena *prev;
+		if (result.parent_is_right) {
+			prev = arena_atomic_cmpxchg(&result.grandparent->right, old_child, new_child,
+						    ARENA_RELEASE, ARENA_RELAXED);
+		} else {
+			prev = arena_atomic_cmpxchg(&result.grandparent->left, old_child, new_child,
+						    ARENA_RELEASE, ARENA_RELAXED);
+		}
+
+		if (prev == old_child) {
+			bpf_arena_free(result.leaf);
+			bpf_arena_free(result.parent);
+			return DS_SUCCESS;
+		}
+
+		retries++;
+	}
+	return DS_ERROR_BUSY;
+}
+
+static inline int ds_bst_search_c(
+	struct ds_bst_head __arena *head,
+	__u64 key)
+{
+	cast_kern(head);
+
+	if (!head)
+		return DS_ERROR_INVALID;
+
+	struct bst_search_result result;
+	bst_search_c(head, key, &result);
+
+	if (result.found)
+		return DS_SUCCESS;
+
+	return DS_ERROR_NOT_FOUND;
+}
+
+static inline int ds_bst_pop_c(struct ds_bst_head __arena *head, struct ds_kv *data)
+{
+	cast_kern(head);
+
+	if (!head || !data)
+		return DS_ERROR_INVALID;
+
+	struct bst_tree_node __arena *node;
+	__u64 iterations = 0;
+
+	node = (struct bst_tree_node __arena *)head->root;
+
+	while (node && iterations < 1000 && can_loop) {
+		cast_kern(node);
+
+		if (node->is_leaf)
+			break;
+
+		struct bst_internal_node __arena *internal =
+			(struct bst_internal_node __arena *)node;
+
+		node = arena_atomic_load(&internal->left, ARENA_ACQUIRE);
+		iterations++;
+	}
+
+	struct bst_leaf_node __arena *leaf = (struct bst_leaf_node __arena *)node;
+	if (!leaf)
+		return DS_ERROR_NOT_FOUND;
+
+	cast_kern(leaf);
+
+	if (leaf->base.infinite_key)
+		return DS_ERROR_NOT_FOUND;
+
+	data->key = leaf->kv.key;
+	data->value = leaf->kv.value;
+
+	return ds_bst_delete_c(head, leaf->kv.key);
+}
+
+static inline int ds_bst_verify_c(struct ds_bst_head __arena *head)
+{
+	cast_kern(head);
+
+	if (!head)
+		return DS_ERROR_INVALID;
+
+	if (!head->root || !head->leaf_inf1 || !head->leaf_inf2)
+		return DS_ERROR_INVALID;
+
+	cast_kern(head->leaf_inf1);
+	cast_kern(head->leaf_inf2);
+	if (head->leaf_inf1->base.infinite_key != 1 ||
+	    head->leaf_inf2->base.infinite_key != 2)
+		return DS_ERROR_INVALID;
+
+	struct bst_tree_node __arena *queue[100];
+	__u64 queue_head = 0, queue_tail = 0;
+	__u64 visited = 0;
+
+	queue[queue_tail++] = (struct bst_tree_node __arena *)head->root;
+
+	while (queue_head < queue_tail && visited < 100 && can_loop) {
+		struct bst_tree_node __arena *node = queue[queue_head++];
+		visited++;
+
+		if (!node)
+			return DS_ERROR_INVALID;
+
+		cast_kern(node);
+
+		if (!node->is_leaf) {
+			struct bst_internal_node __arena *internal =
+				(struct bst_internal_node __arena *)node;
+
+			cast_kern(internal);
+
+			struct bst_tree_node __arena *left =
+				arena_atomic_load(&internal->left, ARENA_ACQUIRE);
+			struct bst_tree_node __arena *right =
+				arena_atomic_load(&internal->right, ARENA_ACQUIRE);
+
+			if (!left || !right)
+				return DS_ERROR_INVALID;
+
+			if (queue_tail < 100)
+				queue[queue_tail++] = left;
+			if (queue_tail < 100)
+				queue[queue_tail++] = right;
+		}
+	}
+
+	return DS_SUCCESS;
+}
+
+static inline __u64 ds_bst_iterate_c(struct ds_bst_head __arena *head,
+					     ds_bst_iter_fn fn,
+					     void *ctx)
+{
+	struct bst_tree_node __arena *stack[100];
+	__u64 stack_top = 0;
+	__u64 count = 0;
+	struct bst_tree_node __arena *current;
+
+	if (!head || !fn)
+		return 0;
+
+	cast_kern(head);
+	current = (struct bst_tree_node __arena *)head->root;
+
+	while ((current != NULL || stack_top > 0) && count < 100 && can_loop) {
+		while (current != NULL && stack_top < 100 && can_loop) {
+			cast_kern(current);
+
+			if (current->is_leaf)
+				break;
+
+			stack[stack_top++] = current;
+			struct bst_internal_node __arena *internal =
+				(struct bst_internal_node __arena *)current;
+			cast_kern(internal);
+			current = arena_atomic_load(&internal->left, ARENA_ACQUIRE);
+		}
+
+		if (current && current->is_leaf) {
+			struct bst_leaf_node __arena *leaf =
+				(struct bst_leaf_node __arena *)current;
+			cast_kern(leaf);
+
+			if (!leaf->base.infinite_key) {
+				int ret = fn(leaf->kv.key, leaf->kv.value, ctx);
+				if (ret != 0)
+					break;
+				count++;
+			}
+
+			if (stack_top > 0) {
+				struct bst_internal_node __arena *parent =
+					(struct bst_internal_node __arena *)stack[--stack_top];
+				cast_kern(parent);
+				current = arena_atomic_load(&parent->right, ARENA_ACQUIRE);
+			} else {
+				current = NULL;
+			}
+		} else {
+			current = NULL;
+		}
+	}
+
+	return count;
+}
+#endif
+
+static inline int ds_bst_init(struct ds_bst_head __arena *head)
+{
+#ifdef __BPF__
+	return ds_bst_init_lkmm(head);
+#else
+	return ds_bst_init_c(head);
+#endif
+}
+
+static inline int ds_bst_insert(
+	struct ds_bst_head __arena *head,
+	__u64 key,
+	__u64 value)
+{
+#ifdef __BPF__
+	return ds_bst_insert_lkmm(head, key, value);
+#else
+	return ds_bst_insert_c(head, key, value);
+#endif
+}
+
+static inline int ds_bst_delete(
+	struct ds_bst_head __arena *head,
+	__u64 key)
+{
+#ifdef __BPF__
+	return ds_bst_delete_lkmm(head, key);
+#else
+	return ds_bst_delete_c(head, key);
+#endif
+}
+
+static inline int ds_bst_search(
+	struct ds_bst_head __arena *head,
+	__u64 key)
+{
+#ifdef __BPF__
+	return ds_bst_search_lkmm(head, key);
+#else
+	return ds_bst_search_c(head, key);
+#endif
+}
+
+static inline int ds_bst_pop(struct ds_bst_head __arena *head, struct ds_kv *data)
+{
+#ifdef __BPF__
+	return ds_bst_pop_lkmm(head, data);
+#else
+	return ds_bst_pop_c(head, data);
+#endif
+}
+
+static inline int ds_bst_verify(struct ds_bst_head __arena *head)
+{
+#ifdef __BPF__
+	return ds_bst_verify_lkmm(head);
+#else
+	return ds_bst_verify_c(head);
+#endif
+}
+
+static inline __u64 ds_bst_iterate(struct ds_bst_head __arena *head,
+				   ds_bst_iter_fn fn,
+				   void *ctx)
+{
+#ifdef __BPF__
+	return ds_bst_iterate_lkmm(head, fn, ctx);
+#else
+	return ds_bst_iterate_c(head, fn, ctx);
+#endif
 }
