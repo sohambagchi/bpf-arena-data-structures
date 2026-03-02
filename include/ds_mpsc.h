@@ -89,7 +89,7 @@ typedef struct ds_mpsc_node __arena ds_mpsc_node_t;
  *          DS_ERROR_INVALID if ctx is NULL,
  *          DS_ERROR_NOMEM if stub allocation fails
  */
-static inline int ds_mpsc_init(struct ds_mpsc_head __arena *ctx)
+static inline int ds_mpsc_init_lkmm(struct ds_mpsc_head __arena *ctx)
 {
 	struct ds_mpsc_node __arena *stub;
 	
@@ -119,6 +119,43 @@ static inline int ds_mpsc_init(struct ds_mpsc_head __arena *ctx)
 	return DS_SUCCESS;
 }
 
+#ifndef __BPF__
+static inline int ds_mpsc_init_c(struct ds_mpsc_head __arena *ctx)
+{
+	struct ds_mpsc_node __arena *stub;
+
+	cast_kern(ctx);
+
+	if (!ctx)
+		return DS_ERROR_INVALID;
+
+	stub = bpf_arena_alloc(sizeof(*stub));
+	if (!stub)
+		return DS_ERROR_NOMEM;
+
+	cast_kern(stub);
+
+	arena_atomic_store(&stub->next, NULL, ARENA_RELAXED);
+	arena_atomic_store(&stub->data.key, 0, ARENA_RELAXED);
+	arena_atomic_store(&stub->data.value, 0, ARENA_RELAXED);
+
+	arena_atomic_store(&ctx->head, stub, ARENA_RELAXED);
+	arena_atomic_store(&ctx->tail, stub, ARENA_RELAXED);
+	arena_atomic_store(&ctx->count, 0, ARENA_RELAXED);
+
+	return DS_SUCCESS;
+}
+#endif
+
+static inline int ds_mpsc_init(struct ds_mpsc_head __arena *ctx)
+{
+#ifdef __BPF__
+	return ds_mpsc_init_lkmm(ctx);
+#else
+	return ds_mpsc_init_c(ctx);
+#endif
+}
+
 /**
  * ds_mpsc_insert - Enqueue an element (wait-free for producers)
  * @ctx: Queue head
@@ -141,8 +178,8 @@ static inline int ds_mpsc_init(struct ds_mpsc_head __arena *ctx)
  *          DS_ERROR_INVALID if ctx is NULL,
  *          DS_ERROR_NOMEM if node allocation fails
  */
-static inline int ds_mpsc_insert(struct ds_mpsc_head __arena *ctx, 
-                                 __u64 key, __u64 value)
+static inline int ds_mpsc_insert_lkmm(struct ds_mpsc_head __arena *ctx,
+					 __u64 key, __u64 value)
 {
 	struct ds_mpsc_node __arena *n;
 	struct ds_mpsc_node __arena *prev;
@@ -189,6 +226,49 @@ static inline int ds_mpsc_insert(struct ds_mpsc_head __arena *ctx,
 	return DS_SUCCESS;
 }
 
+#ifndef __BPF__
+static inline int ds_mpsc_insert_c(struct ds_mpsc_head __arena *ctx,
+				      __u64 key, __u64 value)
+{
+	struct ds_mpsc_node __arena *n;
+	struct ds_mpsc_node __arena *prev;
+
+	if (!ctx)
+		return DS_ERROR_INVALID;
+
+	cast_kern(ctx);
+
+	n = bpf_arena_alloc(sizeof(*n));
+	if (!n)
+		return DS_ERROR_NOMEM;
+
+	cast_kern(n);
+
+	n->data.key = key;
+	n->data.value = value;
+	n->next = NULL;
+
+	cast_user(n);
+	prev = arena_atomic_exchange(&ctx->head, n, ARENA_RELEASE);
+	cast_kern(prev);
+
+	arena_atomic_store(&prev->next, n, ARENA_RELEASE);
+	arena_atomic_add(&ctx->count, 1, ARENA_RELAXED);
+
+	return DS_SUCCESS;
+}
+#endif
+
+static inline int ds_mpsc_insert(struct ds_mpsc_head __arena *ctx,
+				 __u64 key, __u64 value)
+{
+#ifdef __BPF__
+	return ds_mpsc_insert_lkmm(ctx, key, value);
+#else
+	return ds_mpsc_insert_c(ctx, key, value);
+#endif
+}
+
 /**
  * ds_mpsc_delete - Dequeue an element (consumer only, obstruction-free)
  * @ctx: Queue head
@@ -213,8 +293,8 @@ static inline int ds_mpsc_insert(struct ds_mpsc_head __arena *ctx,
  *          DS_ERROR_NOT_FOUND if queue is empty
  *          DS_ERROR_BUSY if producer is stalled (caller should retry)
  */
-static inline int ds_mpsc_delete(struct ds_mpsc_head __arena *ctx, 
-                                 struct ds_kv *output)
+static inline int ds_mpsc_delete_lkmm(struct ds_mpsc_head __arena *ctx,
+					 struct ds_kv *output)
 {
 	struct ds_mpsc_node __arena *tail;
 	struct ds_mpsc_node __arena *next;
@@ -268,6 +348,52 @@ static inline int ds_mpsc_delete(struct ds_mpsc_head __arena *ctx,
 	return DS_SUCCESS;
 }
 
+#ifndef __BPF__
+static inline int ds_mpsc_delete_c(struct ds_mpsc_head __arena *ctx,
+				      struct ds_kv *output)
+{
+	struct ds_mpsc_node __arena *tail;
+	struct ds_mpsc_node __arena *next;
+
+	if (!ctx || !output)
+		return DS_ERROR_INVALID;
+
+	cast_kern(ctx);
+	tail = ctx->tail;
+	cast_kern(tail);
+
+	next = arena_atomic_load(&tail->next, ARENA_ACQUIRE);
+
+	if (tail == ctx->head)
+		return DS_ERROR_NOT_FOUND;
+
+	if (next == NULL)
+		return DS_ERROR_BUSY;
+
+	cast_kern(next);
+
+	output->key = next->data.key;
+	output->value = next->data.value;
+
+	ctx->tail = next;
+	bpf_arena_free(tail);
+
+	arena_atomic_sub(&ctx->count, 1, ARENA_RELAXED);
+
+	return DS_SUCCESS;
+}
+#endif
+
+static inline int ds_mpsc_delete(struct ds_mpsc_head __arena *ctx,
+				 struct ds_kv *output)
+{
+#ifdef __BPF__
+	return ds_mpsc_delete_lkmm(ctx, output);
+#else
+	return ds_mpsc_delete_c(ctx, output);
+#endif
+}
+
 /**
  * ds_mpsc_pop - Pop an element from the queue (wrapper for delete)
  * @ctx: Queue head
@@ -280,15 +406,15 @@ static inline int ds_mpsc_delete(struct ds_mpsc_head __arena *ctx,
  *          0 if queue is empty (output is unchanged),
  *          negative error code for actual errors
  */
-static inline int ds_mpsc_pop(struct ds_mpsc_head __arena *ctx, 
-                              struct ds_kv *output)
+static inline int ds_mpsc_pop_lkmm(struct ds_mpsc_head __arena *ctx,
+				    struct ds_kv *output)
 {
 	int result;
 	int retries = 0;
 	
 	/* Retry loop for stalled producer case */
 	while (retries < DS_MPSC_MAX_RETRIES && can_loop) {
-		result = ds_mpsc_delete(ctx, output);
+		result = ds_mpsc_delete_lkmm(ctx, output);
 		
 		if (result == DS_SUCCESS)
 			return 1; /* Successfully dequeued */
@@ -306,6 +432,41 @@ static inline int ds_mpsc_pop(struct ds_mpsc_head __arena *ctx,
 	return DS_ERROR_BUSY;
 }
 
+#ifndef __BPF__
+static inline int ds_mpsc_pop_c(struct ds_mpsc_head __arena *ctx,
+				 struct ds_kv *output)
+{
+	int result;
+	int retries = 0;
+
+	while (retries < DS_MPSC_MAX_RETRIES && can_loop) {
+		result = ds_mpsc_delete_c(ctx, output);
+
+		if (result == DS_SUCCESS)
+			return 1;
+		else if (result == DS_ERROR_NOT_FOUND)
+			return 0;
+		else if (result == DS_ERROR_BUSY) {
+			retries++;
+			continue;
+		} else
+			return result;
+	}
+
+	return DS_ERROR_BUSY;
+}
+#endif
+
+static inline int ds_mpsc_pop(struct ds_mpsc_head __arena *ctx,
+			      struct ds_kv *output)
+{
+#ifdef __BPF__
+	return ds_mpsc_pop_lkmm(ctx, output);
+#else
+	return ds_mpsc_pop_c(ctx, output);
+#endif
+}
+
 /**
  * ds_mpsc_search - Search for a key in the queue
  * @ctx: Queue head
@@ -321,7 +482,7 @@ static inline int ds_mpsc_pop(struct ds_mpsc_head __arena *ctx,
  *          DS_ERROR_INVALID if ctx is NULL,
  *          DS_ERROR_NOT_FOUND if key not found
  */
-static inline int ds_mpsc_search(struct ds_mpsc_head __arena *ctx, __u64 key)
+static inline int ds_mpsc_search_lkmm(struct ds_mpsc_head __arena *ctx, __u64 key)
 {
 	struct ds_mpsc_node __arena *curr;
 	int count = 0;
@@ -352,6 +513,44 @@ static inline int ds_mpsc_search(struct ds_mpsc_head __arena *ctx, __u64 key)
 	return DS_ERROR_NOT_FOUND;
 }
 
+#ifndef __BPF__
+static inline int ds_mpsc_search_c(struct ds_mpsc_head __arena *ctx, __u64 key)
+{
+	struct ds_mpsc_node __arena *curr;
+	int count = 0;
+	int max_iterations = 100000;
+
+	if (!ctx)
+		return DS_ERROR_INVALID;
+
+	cast_kern(ctx);
+	curr = ctx->tail;
+
+	for (count = 0; count < max_iterations && can_loop; count++) {
+		if (!curr)
+			break;
+
+		cast_kern(curr);
+
+		if (curr->data.key == key && curr != ctx->tail)
+			return DS_SUCCESS;
+
+		curr = arena_atomic_load(&curr->next, ARENA_ACQUIRE);
+	}
+
+	return DS_ERROR_NOT_FOUND;
+}
+#endif
+
+static inline int ds_mpsc_search(struct ds_mpsc_head __arena *ctx, __u64 key)
+{
+#ifdef __BPF__
+	return ds_mpsc_search_lkmm(ctx, key);
+#else
+	return ds_mpsc_search_c(ctx, key);
+#endif
+}
+
 /**
  * ds_mpsc_verify - Verify queue structural integrity
  * @ctx: Queue head
@@ -369,7 +568,7 @@ static inline int ds_mpsc_search(struct ds_mpsc_head __arena *ctx, __u64 key)
  *          DS_ERROR_INVALID if ctx is NULL,
  *          DS_ERROR_CORRUPT if structural corruption detected
  */
-static inline int ds_mpsc_verify(struct ds_mpsc_head __arena *ctx)
+static inline int ds_mpsc_verify_lkmm(struct ds_mpsc_head __arena *ctx)
 {
 	struct ds_mpsc_node __arena *curr;
 	__u64 max_iter = 100000;
@@ -418,6 +617,54 @@ static inline int ds_mpsc_verify(struct ds_mpsc_head __arena *ctx)
 	return DS_ERROR_CORRUPT;
 }
 
+#ifndef __BPF__
+static inline int ds_mpsc_verify_c(struct ds_mpsc_head __arena *ctx)
+{
+	struct ds_mpsc_node __arena *curr;
+	__u64 max_iter = 100000;
+	__u64 i;
+
+	if (!ctx)
+		return DS_ERROR_INVALID;
+
+	cast_kern(ctx);
+
+	if (!ctx->head || !ctx->tail)
+		return DS_ERROR_CORRUPT;
+
+	curr = ctx->tail;
+
+	for (i = 0; i < max_iter && can_loop; i++) {
+		if (!curr) {
+			if (curr != ctx->head)
+				return DS_ERROR_CORRUPT;
+			break;
+		}
+
+		cast_kern(curr);
+
+		if (curr == ctx->head)
+			return DS_SUCCESS;
+
+		curr = arena_atomic_load(&curr->next, ARENA_ACQUIRE);
+
+		if (curr == NULL && ctx->tail != ctx->head)
+			return DS_SUCCESS;
+	}
+
+	return DS_ERROR_CORRUPT;
+}
+#endif
+
+static inline int ds_mpsc_verify(struct ds_mpsc_head __arena *ctx)
+{
+#ifdef __BPF__
+	return ds_mpsc_verify_lkmm(ctx);
+#else
+	return ds_mpsc_verify_c(ctx);
+#endif
+}
+
 /**
  * ds_mpsc_stats - Get queue statistics
  * @ctx: Queue head
@@ -426,8 +673,8 @@ static inline int ds_mpsc_verify(struct ds_mpsc_head __arena *ctx)
  * Returns: DS_SUCCESS on success,
  *          DS_ERROR_INVALID if ctx or stats is NULL
  */
-static inline int ds_mpsc_stats(struct ds_mpsc_head __arena *ctx,
-                                struct ds_stats *stats)
+static inline int ds_mpsc_stats_lkmm(struct ds_mpsc_head __arena *ctx,
+				     struct ds_stats *stats)
 {
 	if (!ctx || !stats)
 		return DS_ERROR_INVALID;
@@ -442,6 +689,33 @@ static inline int ds_mpsc_stats(struct ds_mpsc_head __arena *ctx,
 	stats->memory_used = 0;
 	
 	return DS_SUCCESS;
+}
+
+#ifndef __BPF__
+static inline int ds_mpsc_stats_c(struct ds_mpsc_head __arena *ctx,
+				  struct ds_stats *stats)
+{
+	if (!ctx || !stats)
+		return DS_ERROR_INVALID;
+
+	cast_kern(ctx);
+
+	stats->current_elements = arena_atomic_load(&ctx->count, ARENA_RELAXED);
+	stats->max_elements = 0;
+	stats->memory_used = 0;
+
+	return DS_SUCCESS;
+}
+#endif
+
+static inline int ds_mpsc_stats(struct ds_mpsc_head __arena *ctx,
+				struct ds_stats *stats)
+{
+#ifdef __BPF__
+	return ds_mpsc_stats_lkmm(ctx, stats);
+#else
+	return ds_mpsc_stats_c(ctx, stats);
+#endif
 }
 
 #endif /* DS_MPSC_H */

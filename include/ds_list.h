@@ -78,8 +78,8 @@ struct ds_list_elem {
 /**
  * __list_add_head - Add element to head of list (internal)
  */
-static inline void __list_add_head(struct ds_list_elem __arena *elem,
-                                   struct ds_list_head __arena *h)
+static inline void __list_add_head_lkmm(struct ds_list_elem __arena *elem,
+                                        struct ds_list_head __arena *h)
 {
 	struct ds_list_elem __arena *first = h->first;
 	struct ds_list_node __arena * __arena *tmp;
@@ -105,10 +105,39 @@ static inline void __list_add_head(struct ds_list_elem __arena *elem,
 	WRITE_ONCE(n->pprev, tmp);
 }
 
+#ifndef __BPF__
+static inline void __list_add_head_c(struct ds_list_elem __arena *elem,
+				      struct ds_list_head __arena *h)
+{
+	struct ds_list_elem __arena *first = h->first;
+	struct ds_list_node __arena * __arena *tmp;
+	ds_list_node_t *n = &elem->node;
+
+	cast_user(first);
+	cast_kern(n);
+	if (first)
+		arena_atomic_store(&n->next, &first->node, ARENA_RELAXED);
+	else
+		arena_atomic_store(&n->next, NULL, ARENA_RELAXED);
+	cast_kern(first);
+	if (first) {
+		tmp = &n->next;
+		cast_user(tmp);
+		arena_atomic_store(&first->node.pprev, tmp, ARENA_RELAXED);
+	}
+	cast_user(elem);
+	arena_atomic_store(&h->first, elem, ARENA_RELAXED);
+	tmp = (struct ds_list_node __arena * __arena *)&h->first;
+	cast_user(tmp);
+	cast_kern(n);
+	arena_atomic_store(&n->pprev, tmp, ARENA_RELAXED);
+}
+#endif
+
 /**
  * __list_del - Delete node from list (internal)
  */
-static inline void __list_del(ds_list_node_t *n)
+static inline void __list_del_lkmm(ds_list_node_t *n)
 {
 	ds_list_node_t *next = n->next;
 	ds_list_node_t **tmp_ptr;
@@ -126,11 +155,31 @@ static inline void __list_del(ds_list_node_t *n)
 	}
 }
 
+#ifndef __BPF__
+static inline void __list_del_c(ds_list_node_t *n)
+{
+	ds_list_node_t *next = n->next;
+	ds_list_node_t **tmp_ptr;
+	ds_list_node_t * __arena *pprev = n->pprev;
+
+	cast_user(next);
+	cast_kern(pprev);
+	tmp_ptr = (ds_list_node_t **)pprev;
+	cast_kern(tmp_ptr);
+	arena_atomic_store(tmp_ptr, next, ARENA_RELAXED);
+	if (next) {
+		cast_user(pprev);
+		cast_kern(next);
+		arena_atomic_store(&next->pprev, pprev, ARENA_RELAXED);
+	}
+}
+#endif
+
 /**
  * __list_add_tail - Add element to tail of list (internal)
  */
-static inline void __list_add_tail(struct ds_list_elem __arena *elem,
-                                   struct ds_list_head __arena *h)
+static inline void __list_add_tail_lkmm(struct ds_list_elem __arena *elem,
+                                        struct ds_list_head __arena *h)
 {
 	struct ds_list_elem __arena *curr;
 	struct ds_list_elem __arena *last = NULL;
@@ -143,7 +192,7 @@ static inline void __list_add_tail(struct ds_list_elem __arena *elem,
 	
 	if (!last) {
 		/* Empty list - add as first element */
-		__list_add_head(elem, h);
+		__list_add_head_lkmm(elem, h);
 	} else {
 		/* Add after last element */
 		cast_kern(last);
@@ -161,6 +210,35 @@ static inline void __list_add_tail(struct ds_list_elem __arena *elem,
 	}
 }
 
+#ifndef __BPF__
+static inline void __list_add_tail_c(struct ds_list_elem __arena *elem,
+				      struct ds_list_head __arena *h)
+{
+	struct ds_list_elem __arena *curr;
+	struct ds_list_elem __arena *last = NULL;
+	ds_list_node_t *n = &elem->node;
+
+	list_for_each_entry(curr, h, node) {
+		last = curr;
+	}
+
+	if (!last) {
+		__list_add_head_c(elem, h);
+	} else {
+		cast_kern(last);
+		cast_kern(n);
+
+		arena_atomic_store(&n->next, NULL, ARENA_RELAXED);
+		struct ds_list_node __arena * __arena *tmp = &last->node.next;
+		cast_user(tmp);
+		arena_atomic_store(&n->pprev, tmp, ARENA_RELAXED);
+
+		cast_user(elem);
+		arena_atomic_store(&last->node.next, &elem->node, ARENA_RELAXED);
+	}
+}
+#endif
+
 /* ========================================================================
  * API IMPLEMENTATION
  * ======================================================================== */
@@ -171,7 +249,7 @@ static inline void __list_add_tail(struct ds_list_elem __arena *elem,
  * 
  * Returns: DS_SUCCESS
  */
-static inline int ds_list_init(struct ds_list_head __arena *head)
+static inline int ds_list_init_lkmm(struct ds_list_head __arena *head)
 {
 	cast_kern(head);
 	if (!head)
@@ -181,6 +259,29 @@ static inline int ds_list_init(struct ds_list_head __arena *head)
 	WRITE_ONCE(head->count, 0);
 	
 	return DS_SUCCESS;
+}
+
+#ifndef __BPF__
+static inline int ds_list_init_c(struct ds_list_head __arena *head)
+{
+	cast_kern(head);
+	if (!head)
+		return DS_ERROR_INVALID;
+
+	arena_atomic_store(&head->first, NULL, ARENA_RELAXED);
+	arena_atomic_store(&head->count, 0, ARENA_RELAXED);
+
+	return DS_SUCCESS;
+}
+#endif
+
+static inline int ds_list_init(struct ds_list_head __arena *head)
+{
+#ifdef __BPF__
+	return ds_list_init_lkmm(head);
+#else
+	return ds_list_init_c(head);
+#endif
 }
 
 /**
@@ -193,10 +294,10 @@ static inline int ds_list_init(struct ds_list_head __arena *head)
  * 
  * Returns: DS_SUCCESS on success, DS_ERROR_NOMEM if allocation fails
  */
-static inline int ds_list_insert(struct ds_list_head __arena *head, __u64 key, __u64 value)
+static inline int ds_list_insert_lkmm(struct ds_list_head __arena *head, __u64 key, __u64 value)
 {	
 	if (!head)
-		ds_list_init(head);
+		return DS_ERROR_INVALID;
 	
 	/* Allocate new node - returns __arena pointer */
 	struct ds_list_elem __arena *new_node = bpf_arena_alloc(sizeof(*new_node));
@@ -208,10 +309,39 @@ static inline int ds_list_insert(struct ds_list_head __arena *head, __u64 key, _
 	new_node->data.value = value;
 
 	/* Add to tail of list for FIFO behavior */
-	__list_add_tail(new_node, head);
+	__list_add_tail_lkmm(new_node, head);
 	head->count++;
 	
 	return DS_SUCCESS;
+}
+
+#ifndef __BPF__
+static inline int ds_list_insert_c(struct ds_list_head __arena *head, __u64 key, __u64 value)
+{
+	if (!head)
+		return DS_ERROR_INVALID;
+
+	struct ds_list_elem __arena *new_node = bpf_arena_alloc(sizeof(*new_node));
+	if (!new_node)
+		return DS_ERROR_NOMEM;
+
+	new_node->data.key = key;
+	new_node->data.value = value;
+
+	__list_add_tail_c(new_node, head);
+	head->count++;
+
+	return DS_SUCCESS;
+}
+#endif
+
+static inline int ds_list_insert(struct ds_list_head __arena *head, __u64 key, __u64 value)
+{
+#ifdef __BPF__
+	return ds_list_insert_lkmm(head, key, value);
+#else
+	return ds_list_insert_c(head, key, value);
+#endif
 }
 
 /**
@@ -221,7 +351,7 @@ static inline int ds_list_insert(struct ds_list_head __arena *head, __u64 key, _
  * 
  * Returns: DS_SUCCESS if deleted, DS_ERROR_NOT_FOUND if key doesn't exist
  */
-static inline int ds_list_delete(struct ds_list_head __arena *head, __u64 key)
+static inline int ds_list_delete_lkmm(struct ds_list_head __arena *head, __u64 key)
 {
 	struct ds_list_elem __arena *n;
 	
@@ -233,7 +363,7 @@ static inline int ds_list_delete(struct ds_list_head __arena *head, __u64 key)
 		cast_kern(n);
 		if (n->data.key == key) {
 			/* Found it - delete */
-			__list_del(&n->node);
+			__list_del_lkmm(&n->node);
 			bpf_arena_free(n);
 			head->count--;
 			return DS_SUCCESS;
@@ -241,6 +371,37 @@ static inline int ds_list_delete(struct ds_list_head __arena *head, __u64 key)
 	}
 	
 	return DS_ERROR_NOT_FOUND;
+}
+
+#ifndef __BPF__
+static inline int ds_list_delete_c(struct ds_list_head __arena *head, __u64 key)
+{
+	struct ds_list_elem __arena *n;
+
+	if (!head)
+		return DS_ERROR_INVALID;
+
+	list_for_each_entry(n, head, node) {
+		cast_kern(n);
+		if (n->data.key == key) {
+			__list_del_c(&n->node);
+			bpf_arena_free(n);
+			head->count--;
+			return DS_SUCCESS;
+		}
+	}
+
+	return DS_ERROR_NOT_FOUND;
+}
+#endif
+
+static inline int ds_list_delete(struct ds_list_head __arena *head, __u64 key)
+{
+#ifdef __BPF__
+	return ds_list_delete_lkmm(head, key);
+#else
+	return ds_list_delete_c(head, key);
+#endif
 }
 
 /**
@@ -255,7 +416,7 @@ static inline int ds_list_delete(struct ds_list_head __arena *head, __u64 key)
  *          DS_ERROR_INVALID if head or data is NULL,
  *          DS_ERROR_NOT_FOUND if list is empty
  */
-static inline int ds_list_pop(struct ds_list_head __arena *head, struct ds_kv *data)
+static inline int ds_list_pop_lkmm(struct ds_list_head __arena *head, struct ds_kv *data)
 {
 	struct ds_list_elem __arena *first;
 	
@@ -274,7 +435,7 @@ static inline int ds_list_pop(struct ds_list_head __arena *head, struct ds_kv *d
 	data->value = first->data.value;
 	
 	/* Remove from list */
-	__list_del(&first->node);
+	__list_del_lkmm(&first->node);
 	head->count--;
 	
 	/* Free the node */
@@ -282,6 +443,43 @@ static inline int ds_list_pop(struct ds_list_head __arena *head, struct ds_kv *d
 	bpf_arena_free(first);
 	
 	return DS_SUCCESS;
+}
+
+#ifndef __BPF__
+static inline int ds_list_pop_c(struct ds_list_head __arena *head, struct ds_kv *data)
+{
+	struct ds_list_elem __arena *first;
+
+	if (!head || !data)
+		return DS_ERROR_INVALID;
+
+	cast_kern(head);
+	first = head->first;
+
+	if (!first)
+		return DS_ERROR_NOT_FOUND;
+
+	cast_kern(first);
+	data->key = first->data.key;
+	data->value = first->data.value;
+
+	__list_del_c(&first->node);
+	head->count--;
+
+	cast_user(first);
+	bpf_arena_free(first);
+
+	return DS_SUCCESS;
+}
+#endif
+
+static inline int ds_list_pop(struct ds_list_head __arena *head, struct ds_kv *data)
+{
+#ifdef __BPF__
+	return ds_list_pop_lkmm(head, data);
+#else
+	return ds_list_pop_c(head, data);
+#endif
 }
 
 /**
@@ -292,7 +490,7 @@ static inline int ds_list_pop(struct ds_list_head __arena *head, struct ds_kv *d
  * 
  * Returns: DS_SUCCESS if found, DS_ERROR_NOT_FOUND otherwise
  */
-static inline int ds_list_search(struct ds_list_head __arena *head, __u64 key)
+static inline int ds_list_search_lkmm(struct ds_list_head __arena *head, __u64 key)
 {
 	struct ds_list_elem __arena *n;
 	
@@ -310,6 +508,33 @@ static inline int ds_list_search(struct ds_list_head __arena *head, __u64 key)
 	return DS_ERROR_NOT_FOUND;
 }
 
+#ifndef __BPF__
+static inline int ds_list_search_c(struct ds_list_head __arena *head, __u64 key)
+{
+	struct ds_list_elem __arena *n;
+
+	if (!head)
+		return DS_ERROR_INVALID;
+
+	list_for_each_entry(n, head, node) {
+		cast_kern(n);
+		if (n->data.key == key)
+			return DS_SUCCESS;
+	}
+
+	return DS_ERROR_NOT_FOUND;
+}
+#endif
+
+static inline int ds_list_search(struct ds_list_head __arena *head, __u64 key)
+{
+#ifdef __BPF__
+	return ds_list_search_lkmm(head, key);
+#else
+	return ds_list_search_c(head, key);
+#endif
+}
+
 /**
  * ds_list_verify - Verify list integrity
  * @head: List head
@@ -321,7 +546,7 @@ static inline int ds_list_search(struct ds_list_head __arena *head, __u64 key)
  * 
  * Returns: DS_SUCCESS if valid, DS_ERROR_CORRUPT otherwise
  */
-static inline int ds_list_verify(struct ds_list_head __arena *head)
+static inline int ds_list_verify_lkmm(struct ds_list_head __arena *head)
 {
 	struct ds_list_elem __arena *elem;
 	struct ds_list_node __arena * __arena *expected_pprev = (struct ds_list_node __arena * __arena *)&head->first;
@@ -353,6 +578,48 @@ static inline int ds_list_verify(struct ds_list_head __arena *head)
 		return DS_ERROR_CORRUPT;
 	
 	return DS_SUCCESS;
+}
+
+#ifndef __BPF__
+static inline int ds_list_verify_c(struct ds_list_head __arena *head)
+{
+	struct ds_list_elem __arena *elem;
+	struct ds_list_node __arena * __arena *expected_pprev = (struct ds_list_node __arena * __arena *)&head->first;
+	__u64 count = 0;
+	__u64 max_iterations = 100000;
+
+	if (!head)
+		return DS_ERROR_INVALID;
+
+	cast_kern(head);
+
+	list_for_each_entry(elem, head, node) {
+		cast_kern(elem);
+		count++;
+
+		if (elem->node.pprev != expected_pprev)
+			return DS_ERROR_CORRUPT;
+
+		if (count >= max_iterations)
+			return DS_ERROR_CORRUPT;
+
+		expected_pprev = &elem->node.next;
+	}
+
+	if (count != head->count)
+		return DS_ERROR_CORRUPT;
+
+	return DS_SUCCESS;
+}
+#endif
+
+static inline int ds_list_verify(struct ds_list_head __arena *head)
+{
+#ifdef __BPF__
+	return ds_list_verify_lkmm(head);
+#else
+	return ds_list_verify_c(head);
+#endif
 }
 
 /**
@@ -388,9 +655,9 @@ static inline const struct ds_metadata* ds_list_get_metadata(void)
  */
 typedef int (*ds_list_iter_fn)(__u64 key, __u64 value, void *ctx);
 
-static inline __u64 ds_list_iterate(struct ds_list_head __arena *head,
-                                     ds_list_iter_fn fn,
-                                     void *ctx)
+static inline __u64 ds_list_iterate_lkmm(struct ds_list_head __arena *head,
+                                         ds_list_iter_fn fn,
+                                         void *ctx)
 {
 	struct ds_list_elem __arena *elem;
 	__u64 count = 0;
@@ -409,4 +676,40 @@ static inline __u64 ds_list_iterate(struct ds_list_head __arena *head,
 	}
 	
 	return count;
+}
+
+#ifndef __BPF__
+static inline __u64 ds_list_iterate_c(struct ds_list_head __arena *head,
+				      ds_list_iter_fn fn,
+				      void *ctx)
+{
+	struct ds_list_elem __arena *elem;
+	__u64 count = 0;
+
+	if (!head || !fn)
+		return 0;
+
+	list_for_each_entry(elem, head, node) {
+		cast_kern(elem);
+
+		int ret = fn(elem->data.key, elem->data.value, ctx);
+		if (ret != 0)
+			break;
+
+		count++;
+	}
+
+	return count;
+}
+#endif
+
+static inline __u64 ds_list_iterate(struct ds_list_head __arena *head,
+				    ds_list_iter_fn fn,
+				    void *ctx)
+{
+#ifdef __BPF__
+	return ds_list_iterate_lkmm(head, fn, ctx);
+#else
+	return ds_list_iterate_c(head, fn, ctx);
+#endif
 }

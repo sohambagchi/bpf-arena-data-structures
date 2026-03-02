@@ -98,7 +98,7 @@ typedef struct ds_vyukhov_node __arena ds_vyukhov_node_t;
  * Returns: DS_SUCCESS on success, DS_ERROR_INVALID if capacity is invalid,
  *          DS_ERROR_NOMEM if allocation fails
  */
-static inline int ds_vyukhov_init(struct ds_vyukhov_head __arena *head, __u32 capacity)
+static inline int ds_vyukhov_init_lkmm(struct ds_vyukhov_head __arena *head, __u32 capacity)
 {
 	cast_kern(head);
 	
@@ -133,6 +133,47 @@ static inline int ds_vyukhov_init(struct ds_vyukhov_head __arena *head, __u32 ca
 	return DS_SUCCESS;
 }
 
+#ifndef __BPF__
+static inline int ds_vyukhov_init_c(struct ds_vyukhov_head __arena *head, __u32 capacity)
+{
+	cast_kern(head);
+
+	if (!head)
+		return DS_ERROR_INVALID;
+
+	if (capacity < 2 || (capacity & (capacity - 1)) != 0)
+		return DS_ERROR_INVALID;
+
+	arena_atomic_store(&head->buffer_mask, capacity - 1, ARENA_RELAXED);
+	arena_atomic_store(&head->enqueue_pos, 0, ARENA_RELAXED);
+	arena_atomic_store(&head->dequeue_pos, 0, ARENA_RELAXED);
+	arena_atomic_store(&head->count, 0, ARENA_RELAXED);
+
+	head->buffer = bpf_arena_alloc(capacity * sizeof(struct ds_vyukhov_node));
+	if (!head->buffer)
+		return DS_ERROR_NOMEM;
+
+	cast_kern(head->buffer);
+
+	for (__u32 i = 0; i < capacity && can_loop; i++) {
+		struct ds_vyukhov_node __arena *cell = &head->buffer[i];
+		cast_kern(cell);
+		arena_atomic_store(&cell->sequence, i, ARENA_RELAXED);
+	}
+
+	return DS_SUCCESS;
+}
+#endif
+
+static inline int ds_vyukhov_init(struct ds_vyukhov_head __arena *head, __u32 capacity)
+{
+#ifdef __BPF__
+	return ds_vyukhov_init_lkmm(head, capacity);
+#else
+	return ds_vyukhov_init_c(head, capacity);
+#endif
+}
+
 /**
  * ds_vyukhov_insert - Enqueue an element (insert)
  * @head: Queue head
@@ -147,8 +188,8 @@ static inline int ds_vyukhov_init(struct ds_vyukhov_head __arena *head, __u32 ca
  *          DS_ERROR_NOMEM if queue is full
  *          DS_ERROR_BUSY if max retries exceeded
  */
-static inline int ds_vyukhov_insert(struct ds_vyukhov_head __arena *head,
-                                     __u64 key, __u64 value)
+static inline int ds_vyukhov_insert_lkmm(struct ds_vyukhov_head __arena *head,
+                                         __u64 key, __u64 value)
 {
 	struct ds_vyukhov_node __arena *cell;
 	__u64 pos;
@@ -203,6 +244,61 @@ static inline int ds_vyukhov_insert(struct ds_vyukhov_head __arena *head,
 	return DS_ERROR_BUSY;
 }
 
+#ifndef __BPF__
+static inline int ds_vyukhov_insert_c(struct ds_vyukhov_head __arena *head,
+					 __u64 key, __u64 value)
+{
+	struct ds_vyukhov_node __arena *cell;
+	__u64 pos;
+	__u64 mask;
+	int retries = 0;
+
+	if (!head || !head->buffer)
+		return DS_ERROR_INVALID;
+
+	pos = arena_atomic_load(&head->enqueue_pos, ARENA_RELAXED);
+	mask = head->buffer_mask;
+
+	for (; retries < DS_VYUKHOV_MAX_RETRIES && can_loop; retries++) {
+		cell = &head->buffer[pos & mask];
+		cast_kern(cell);
+
+		__u64 seq = arena_atomic_load(&cell->sequence, ARENA_ACQUIRE);
+		__s64 dif = (__s64)seq - (__s64)pos;
+
+		if (dif == 0) {
+			__u64 old_pos = arena_atomic_cmpxchg(&head->enqueue_pos, pos, pos + 1,
+							     ARENA_RELAXED, ARENA_RELAXED);
+
+			if (old_pos == pos) {
+				cell->data.key = key;
+				cell->data.value = value;
+
+				arena_atomic_store(&cell->sequence, pos + 1, ARENA_RELEASE);
+				arena_atomic_inc(&head->count);
+				return DS_SUCCESS;
+			}
+		} else if (dif < 0) {
+			return DS_ERROR_NOMEM;
+		}
+
+		pos = arena_atomic_load(&head->enqueue_pos, ARENA_RELAXED);
+	}
+
+	return DS_ERROR_BUSY;
+}
+#endif
+
+static inline int ds_vyukhov_insert(struct ds_vyukhov_head __arena *head,
+				    __u64 key, __u64 value)
+{
+#ifdef __BPF__
+	return ds_vyukhov_insert_lkmm(head, key, value);
+#else
+	return ds_vyukhov_insert_c(head, key, value);
+#endif
+}
+
 /**
  * ds_vyukhov_pop - Dequeue an element (delete/pop)
  * @head: Queue head
@@ -217,7 +313,7 @@ static inline int ds_vyukhov_insert(struct ds_vyukhov_head __arena *head,
  *          DS_ERROR_NOT_FOUND if queue is empty
  *          DS_ERROR_BUSY if max retries exceeded
  */
-static inline int ds_vyukhov_pop(struct ds_vyukhov_head __arena *head, struct ds_kv *data)
+static inline int ds_vyukhov_pop_lkmm(struct ds_vyukhov_head __arena *head, struct ds_kv *data)
 {
 	struct ds_vyukhov_node __arena *cell;
 	__u64 pos;
@@ -273,6 +369,60 @@ static inline int ds_vyukhov_pop(struct ds_vyukhov_head __arena *head, struct ds
 	return DS_ERROR_BUSY;
 }
 
+#ifndef __BPF__
+static inline int ds_vyukhov_pop_c(struct ds_vyukhov_head __arena *head, struct ds_kv *data)
+{
+	struct ds_vyukhov_node __arena *cell;
+	__u64 pos;
+	__u64 mask;
+	int retries = 0;
+
+	if (!head || !head->buffer || !data)
+		return DS_ERROR_INVALID;
+
+	pos = arena_atomic_load(&head->dequeue_pos, ARENA_RELAXED);
+	mask = head->buffer_mask;
+
+	for (; retries < DS_VYUKHOV_MAX_RETRIES && can_loop; retries++) {
+		cell = &head->buffer[pos & mask];
+		cast_kern(cell);
+
+		__u64 seq = arena_atomic_load(&cell->sequence, ARENA_ACQUIRE);
+		__s64 dif = (__s64)seq - (__s64)(pos + 1);
+
+		if (dif == 0) {
+			__u64 old_pos = arena_atomic_cmpxchg(&head->dequeue_pos, pos, pos + 1,
+							     ARENA_RELAXED, ARENA_RELAXED);
+
+			if (old_pos == pos) {
+				cast_kern(cell);
+				data->key = cell->data.key;
+				data->value = cell->data.value;
+
+				arena_atomic_store(&cell->sequence, pos + mask + 1, ARENA_RELEASE);
+				arena_atomic_dec(&head->count);
+				return DS_SUCCESS;
+			}
+		} else if (dif < 0) {
+			return DS_ERROR_NOT_FOUND;
+		}
+
+		pos = arena_atomic_load(&head->dequeue_pos, ARENA_RELAXED);
+	}
+
+	return DS_ERROR_BUSY;
+}
+#endif
+
+static inline int ds_vyukhov_pop(struct ds_vyukhov_head __arena *head, struct ds_kv *data)
+{
+#ifdef __BPF__
+	return ds_vyukhov_pop_lkmm(head, data);
+#else
+	return ds_vyukhov_pop_c(head, data);
+#endif
+}
+
 /**
  * ds_vyukhov_search - Search for a key in the queue
  * @head: Queue head
@@ -284,7 +434,7 @@ static inline int ds_vyukhov_pop(struct ds_vyukhov_head __arena *head, struct ds
  * 
  * Returns: DS_SUCCESS if found, DS_ERROR_NOT_FOUND otherwise
  */
-static inline int ds_vyukhov_search(struct ds_vyukhov_head __arena *head, __u64 key)
+static inline int ds_vyukhov_search_lkmm(struct ds_vyukhov_head __arena *head, __u64 key)
 {
 	__u64 start, end, mask;
 	
@@ -308,6 +458,39 @@ static inline int ds_vyukhov_search(struct ds_vyukhov_head __arena *head, __u64 
 	return DS_ERROR_NOT_FOUND;
 }
 
+#ifndef __BPF__
+static inline int ds_vyukhov_search_c(struct ds_vyukhov_head __arena *head, __u64 key)
+{
+	__u64 start, end, mask;
+
+	if (!head || !head->buffer)
+		return DS_ERROR_INVALID;
+
+	start = arena_atomic_load(&head->dequeue_pos, ARENA_RELAXED);
+	end = arena_atomic_load(&head->enqueue_pos, ARENA_RELAXED);
+	mask = head->buffer_mask;
+
+	for (__u64 i = start; i < end && can_loop; i++) {
+		struct ds_vyukhov_node __arena *cell = &head->buffer[i & mask];
+		cast_kern(cell);
+
+		if (cell->data.key == key)
+			return DS_SUCCESS;
+	}
+
+	return DS_ERROR_NOT_FOUND;
+}
+#endif
+
+static inline int ds_vyukhov_search(struct ds_vyukhov_head __arena *head, __u64 key)
+{
+#ifdef __BPF__
+	return ds_vyukhov_search_lkmm(head, key);
+#else
+	return ds_vyukhov_search_c(head, key);
+#endif
+}
+
 /**
  * ds_vyukhov_verify - Verify queue integrity
  * @head: Queue head
@@ -320,7 +503,7 @@ static inline int ds_vyukhov_search(struct ds_vyukhov_head __arena *head, __u64 
  * 
  * Returns: DS_SUCCESS if valid, DS_ERROR_CORRUPT otherwise
  */
-static inline int ds_vyukhov_verify(struct ds_vyukhov_head __arena *head)
+static inline int ds_vyukhov_verify_lkmm(struct ds_vyukhov_head __arena *head)
 {
 	if (!head)
 		return DS_ERROR_INVALID;
@@ -350,6 +533,45 @@ static inline int ds_vyukhov_verify(struct ds_vyukhov_head __arena *head)
 		return DS_ERROR_CORRUPT;
 	
 	return DS_SUCCESS;
+}
+
+#ifndef __BPF__
+static inline int ds_vyukhov_verify_c(struct ds_vyukhov_head __arena *head)
+{
+	if (!head)
+		return DS_ERROR_INVALID;
+
+	cast_kern(head);
+
+	if (!head->buffer)
+		return DS_ERROR_CORRUPT;
+
+	__u64 enq = arena_atomic_load(&head->enqueue_pos, ARENA_RELAXED);
+	__u64 deq = arena_atomic_load(&head->dequeue_pos, ARENA_RELAXED);
+
+	if (deq > enq)
+		return DS_ERROR_CORRUPT;
+
+	__u64 size = enq - deq;
+	__u64 capacity = head->buffer_mask + 1;
+
+	if (size > capacity)
+		return DS_ERROR_CORRUPT;
+
+	if (arena_atomic_load(&head->count, ARENA_RELAXED) > capacity)
+		return DS_ERROR_CORRUPT;
+
+	return DS_SUCCESS;
+}
+#endif
+
+static inline int ds_vyukhov_verify(struct ds_vyukhov_head __arena *head)
+{
+#ifdef __BPF__
+	return ds_vyukhov_verify_lkmm(head);
+#else
+	return ds_vyukhov_verify_c(head);
+#endif
 }
 
 /**
@@ -386,9 +608,9 @@ static inline const struct ds_metadata* ds_vyukhov_get_metadata(void)
  */
 typedef int (*ds_vyukhov_iter_fn)(__u64 key, __u64 value, void *ctx);
 
-static inline __u64 ds_vyukhov_iterate(struct ds_vyukhov_head __arena *head,
-                                        ds_vyukhov_iter_fn fn,
-                                        void *ctx)
+static inline __u64 ds_vyukhov_iterate_lkmm(struct ds_vyukhov_head __arena *head,
+					    ds_vyukhov_iter_fn fn,
+					    void *ctx)
 {
 	__u64 count = 0;
 	
@@ -413,6 +635,46 @@ static inline __u64 ds_vyukhov_iterate(struct ds_vyukhov_head __arena *head,
 	}
 	
 	return count;
+}
+
+#ifndef __BPF__
+static inline __u64 ds_vyukhov_iterate_c(struct ds_vyukhov_head __arena *head,
+					 ds_vyukhov_iter_fn fn,
+					 void *ctx)
+{
+	__u64 count = 0;
+
+	if (!head || !fn || !head->buffer)
+		return 0;
+
+	__u64 start = arena_atomic_load(&head->dequeue_pos, ARENA_RELAXED);
+	__u64 end = arena_atomic_load(&head->enqueue_pos, ARENA_RELAXED);
+	__u64 mask = head->buffer_mask;
+
+	for (__u64 i = start; i < end && can_loop; i++) {
+		struct ds_vyukhov_node __arena *cell = &head->buffer[i & mask];
+		cast_kern(cell);
+
+		int ret = fn(cell->data.key, cell->data.value, ctx);
+		if (ret != 0)
+			break;
+
+		count++;
+	}
+
+	return count;
+}
+#endif
+
+static inline __u64 ds_vyukhov_iterate(struct ds_vyukhov_head __arena *head,
+				       ds_vyukhov_iter_fn fn,
+				       void *ctx)
+{
+#ifdef __BPF__
+	return ds_vyukhov_iterate_lkmm(head, fn, ctx);
+#else
+	return ds_vyukhov_iterate_c(head, fn, ctx);
+#endif
 }
 
 #endif /* DS_VYUKHOV_H */
