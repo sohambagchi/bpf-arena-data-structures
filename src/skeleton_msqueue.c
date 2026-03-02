@@ -90,7 +90,7 @@ static void poll_and_dequeue()
 			continue;
 		}
 		
-		result = ds_msqueue_pop(queue, &data);
+		result = ds_msqueue_pop_c(queue, &data);
 		
 		if (result == DS_SUCCESS) {
 			/* Successfully dequeued an element */
@@ -125,7 +125,7 @@ static int verify_data_structure(void)
 	
 	printf("Verifying data structure from userspace...\n");
 	
-	int result = ds_msqueue_verify(queue);
+	int result = ds_msqueue_verify_c(queue);
 	if (result == DS_SUCCESS) {
 		printf("✓ Data structure verification PASSED\n");
 	} else {

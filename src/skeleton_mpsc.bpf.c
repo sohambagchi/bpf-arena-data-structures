@@ -75,7 +75,7 @@ static __always_inline int init_data_structure(void)
 	/* Initialize pointer to global head on first call */
 	ds_head = &global_ds_head;
 	
-	result = ds_mpsc_init(ds_head);
+	result = ds_mpsc_init_lkmm(ds_head);
 	if (result == DS_SUCCESS) {
 		initialized = true;
 	}
@@ -117,7 +117,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 	ts = bpf_ktime_get_ns();
 	
 	/* Insert into queue (wait-free operation) */
-	result = ds_mpsc_insert(ds_head, pid, ts);
+	result = ds_mpsc_insert_lkmm(ds_head, pid, ts);
 	
 	/* Track statistics */
 	total_kernel_ops++;

@@ -82,7 +82,7 @@ static void poll_and_dequeue()
 	printf("Starting continuous polling (Ctrl+C to stop)...\n\n");
 	
 	while (!stop_test) {
-		result = ds_vyukhov_pop(head, &data);
+		result = ds_vyukhov_pop_c(head, &data);
 		
 		if (result == DS_SUCCESS) {
 			printf("Dequeued element %llu: pid=%llu, ts=%llu\n", 
@@ -113,7 +113,7 @@ static int verify_data_structure(void)
 	
 	printf("Verifying data structure from userspace...\n");
 	
-	int result = ds_vyukhov_verify(head);
+	int result = ds_vyukhov_verify_c(head);
 	if (result == DS_SUCCESS) {
 		printf("✓ Data structure verification PASSED\n");
 	} else {

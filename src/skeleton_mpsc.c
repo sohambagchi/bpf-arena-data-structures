@@ -91,7 +91,7 @@ static void poll_and_dequeue()
 		}
 		
 		/* Pop uses built-in retry logic for stalled producers */
-		result = ds_mpsc_pop(head, &data);
+		result = ds_mpsc_pop_c(head, &data);
 		
 		if (result > 0) {
 			/* Successfully dequeued an element */
@@ -132,7 +132,7 @@ static int verify_data_structure(void)
 	
 	printf("Verifying data structure from userspace...\n");
 	
-	int result = ds_mpsc_verify(head);
+	int result = ds_mpsc_verify_c(head);
 	if (result == DS_SUCCESS) {
 		printf("✓ Data structure verification PASSED\n");
 	} else {

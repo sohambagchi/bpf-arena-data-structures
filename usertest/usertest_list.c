@@ -32,7 +32,7 @@ static void *producer_thread(void *arg)
 		uint64_t value = usertest_now_ns();
 
 		pthread_mutex_lock(&c->lock);
-		int rc = ds_list_insert(&c->list, key, value);
+		int rc = ds_list_insert_c(&c->list, key, value);
 		pthread_mutex_unlock(&c->lock);
 
 		if (rc != DS_SUCCESS) {
@@ -62,7 +62,7 @@ static void *consumer_thread(void *arg)
 			return NULL;
 
 		pthread_mutex_lock(&c->lock);
-		int rc = ds_list_pop(&c->list, &out);
+		int rc = ds_list_pop_c(&c->list, &out);
 		pthread_mutex_unlock(&c->lock);
 
 		if (rc == DS_SUCCESS) {
@@ -94,7 +94,7 @@ int main(void)
 		perror("pthread_mutex_init");
 		return 1;
 	}
-	if (ds_list_init(&c.list) != DS_SUCCESS) {
+	if (ds_list_init_c(&c.list) != DS_SUCCESS) {
 		fprintf(stderr, "list: init failed\n");
 		return 1;
 	}

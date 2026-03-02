@@ -84,29 +84,29 @@ static __always_inline int handle_operation(struct ds_operation *op)
 	switch (op->type) {
 	case DS_OP_INIT:
 		/* DS_API_INSERT: Call your init function */
-		result = ds_msqueue_init(ds_queue);
+		result = ds_msqueue_init_lkmm(ds_queue);
 		initialized = true;
 		break;
 		
 	case DS_OP_INSERT:
 		/* DS_API_INSERT: Call your insert function */
-		result = ds_msqueue_insert(ds_queue, op->kv.key, op->kv.value);
+		result = ds_msqueue_insert_lkmm(ds_queue, op->kv.key, op->kv.value);
 		break;
 		
 	case DS_OP_DELETE:
 	case DS_OP_POP:
 		/* DS_API_INSERT: Call your pop function */
-		result = ds_msqueue_pop(ds_queue, &op->kv);
+		result = ds_msqueue_pop_lkmm(ds_queue, &op->kv);
 		break;
 		
 	case DS_OP_SEARCH:
 		/* DS_API_INSERT: Call your search function */
-		result = ds_msqueue_search(ds_queue, op->kv.key);
+		result = ds_msqueue_search_lkmm(ds_queue, op->kv.key);
 		break;
 		
 	case DS_OP_VERIFY:
 		/* DS_API_INSERT: Call your verify function */
-		result = ds_msqueue_verify(ds_queue);
+		result = ds_msqueue_verify_lkmm(ds_queue);
 		break;
 		
 	default:
@@ -141,7 +141,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 	
 	/* Lazy initialization on first use */
 	if (!initialized) {
-		result = ds_msqueue_init(ds_queue);
+		result = ds_msqueue_init_lkmm(ds_queue);
 		if (result != DS_SUCCESS) {
 			total_kernel_failures++;
 			return 0;
@@ -154,7 +154,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 
 	pid = bpf_get_current_pid_tgid() >> 32;
 	ts = bpf_ktime_get_ns();
-	result = ds_msqueue_insert(ds_queue, pid, ts);
+	result = ds_msqueue_insert_lkmm(ds_queue, pid, ts);
 	
 	/* Update statistics */
 	total_kernel_ops++;

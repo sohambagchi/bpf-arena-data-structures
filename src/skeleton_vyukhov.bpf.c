@@ -85,29 +85,29 @@ static __always_inline int handle_operation(struct ds_operation *op)
 	switch (op->type) {
 	case DS_OP_INIT:
 		/* DS_API_INSERT: Call your init function */
-		result = ds_vyukhov_init(ds_head, config_queue_capacity);
+		result = ds_vyukhov_init_lkmm(ds_head, config_queue_capacity);
 		initialized = true;
 		break;
 		
 	case DS_OP_INSERT:
 		/* DS_API_INSERT: Call your insert function */
-		result = ds_vyukhov_insert(ds_head, op->kv.key, op->kv.value);
+		result = ds_vyukhov_insert_lkmm(ds_head, op->kv.key, op->kv.value);
 		break;
 		
 	case DS_OP_DELETE:
 	case DS_OP_POP:
 		/* DS_API_INSERT: Call your pop function */
-		result = ds_vyukhov_pop(ds_head, &op->kv);
+		result = ds_vyukhov_pop_lkmm(ds_head, &op->kv);
 		break;
 		
 	case DS_OP_SEARCH:
 		/* DS_API_INSERT: Call your search function */
-		result = ds_vyukhov_search(ds_head, op->kv.key);
+		result = ds_vyukhov_search_lkmm(ds_head, op->kv.key);
 		break;
 		
 	case DS_OP_VERIFY:
 		/* DS_API_INSERT: Call your verify function */
-		result = ds_vyukhov_verify(ds_head);
+		result = ds_vyukhov_verify_lkmm(ds_head);
 		break;
 		
 	default:
@@ -142,7 +142,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 	
 	/* Lazy initialization on first use */
 	if (!initialized) {
-		result = ds_vyukhov_init(ds_head, config_queue_capacity);
+		result = ds_vyukhov_init_lkmm(ds_head, config_queue_capacity);
 		if (result != DS_SUCCESS) {
 			total_kernel_failures++;
 			return 0;
@@ -156,7 +156,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 	pid = bpf_get_current_pid_tgid() >> 32;
 	ts = bpf_ktime_get_ns();
 	
-	result = ds_vyukhov_insert(ds_head, pid, ts);
+	result = ds_vyukhov_insert_lkmm(ds_head, pid, ts);
 	
 	/* Update statistics */
 	total_kernel_ops++;
