@@ -174,18 +174,12 @@ static inline int __msqueue_add_node_lkmm(struct ds_msqueue_elem __arena *new_no
 	while (retry_count < max_retries && can_loop) {
 		/* Read tail */
 
-		#ifdef LKMM_OPTIMIZED
 		tail = READ_ONCE(queue->tail);
-		#else
-		tail = smp_load_acquire(&queue->tail);
-		#endif
-
+		
 		cast_kern(tail);
-		#ifdef LKMM_OPTIMIZED		
+
+		
 		next = READ_ONCE(tail->node.next);
-		#else
-		next = smp_load_acquire(&tail->node.next);
-		#endif
 		
 		cast_user(next);
 		if (next != NULL) {
@@ -235,20 +229,13 @@ static inline int __msqueue_add_node_c(struct ds_msqueue_elem __arena *new_node,
 	int retry_count = 0;
 
 	while (retry_count < max_retries && can_loop) {
-#ifdef LKMM_OPTIMIZED
-		tail = arena_atomic_load(&queue->tail, ARENA_RELAXED);
-#else
+
 		tail = arena_atomic_load(&queue->tail, ARENA_ACQUIRE);
-#endif
-
 		cast_kern(tail);
-#ifdef LKMM_OPTIMIZED
-		next = arena_atomic_load(&tail->node.next, ARENA_RELAXED);
-#else
-		next = arena_atomic_load(&tail->node.next, ARENA_ACQUIRE);
-#endif
 
+		next = arena_atomic_load(&tail->node.next, ARENA_ACQUIRE);
 		cast_user(next);
+
 		if (next != NULL) {
 			struct ds_msqueue_elem __arena *next_elem;
 			next_elem = (void __arena *)__msqueue_list_entry(next, struct ds_msqueue_elem, node);
@@ -393,22 +380,12 @@ static inline int ds_msqueue_pop_lkmm(struct ds_msqueue __arena *queue, struct d
 	while (retry_count < max_retries && can_loop) {
 		/* Read Head, Tail, and next */
 
-		#ifdef LKMM_OPTIMIZED
 		head = READ_ONCE(queue->head);
-		#else
-		head = smp_load_acquire(&queue->head);
-		#endif
-
 		tail = smp_load_acquire(&queue->tail);
-
-		cast_kern(head);
 		
-		#ifdef LKMM_OPTIMIZED
+		cast_kern(head);
 		next = READ_ONCE(head->node.next);
-		#else
-		next = smp_load_acquire(&head->node.next);
-		#endif
-
+		
 		cast_user(head);
 		if ( smp_load_acquire(&queue->head) != head ) {
 			retry_count++;
@@ -468,21 +445,12 @@ static inline int ds_msqueue_pop_c(struct ds_msqueue __arena *queue, struct ds_k
 		return DS_ERROR_INVALID;
 
 	while (retry_count < max_retries && can_loop) {
-#ifdef LKMM_OPTIMIZED
-		head = arena_atomic_load(&queue->head, ARENA_RELAXED);
-#else
 		head = arena_atomic_load(&queue->head, ARENA_ACQUIRE);
-#endif
-
 		tail = arena_atomic_load(&queue->tail, ARENA_ACQUIRE);
 
 		cast_kern(head);
 
-#ifdef LKMM_OPTIMIZED
-		next = arena_atomic_load(&head->node.next, ARENA_RELAXED);
-#else
 		next = arena_atomic_load(&head->node.next, ARENA_ACQUIRE);
-#endif
 
 		cast_user(head);
 		if (arena_atomic_load(&queue->head, ARENA_ACQUIRE) != head) {

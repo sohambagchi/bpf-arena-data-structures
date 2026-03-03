@@ -100,11 +100,11 @@ static inline void ds_ck_fifo_spsc_fifo_init_c(struct ds_ck_fifo_spsc __arena *f
 	cast_kern(fifo);
 	cast_kern(stub);
 
-	arena_atomic_store(&stub->next, NULL, ARENA_RELAXED);
-	arena_atomic_store(&fifo->head, stub, ARENA_RELAXED);
-	arena_atomic_store(&fifo->tail, stub, ARENA_RELAXED);
-	arena_atomic_store(&fifo->head_snapshot, stub, ARENA_RELAXED);
-	arena_atomic_store(&fifo->garbage, stub, ARENA_RELAXED);
+	stub->next = NULL;
+	fifo->head = stub;
+	fifo->tail = stub;
+	fifo->head_snapshot = stub;
+	fifo->garbage = stub;
 }
 #endif
 
@@ -146,13 +146,13 @@ static inline void ds_ck_fifo_spsc_enqueue_c(struct ds_ck_fifo_spsc __arena *fif
 	cast_kern(fifo);
 	cast_kern(entry);
 
-	arena_atomic_store(&entry->value, value, ARENA_RELAXED);
-	arena_atomic_store(&entry->next, NULL, ARENA_RELAXED);
+	entry->value = value;
+	entry->next = NULL;
 
 	tail = arena_atomic_load(&fifo->tail, ARENA_RELAXED);
 	cast_kern(tail);
 	arena_atomic_store(&tail->next, entry, ARENA_RELEASE);
-	arena_atomic_store(&fifo->tail, entry, ARENA_RELAXED);
+	fifo->tail = entry;
 }
 #endif
 

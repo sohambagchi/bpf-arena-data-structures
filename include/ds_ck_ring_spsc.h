@@ -87,10 +87,10 @@ static inline int ds_ck_ring_spsc_init_c(struct ds_ck_ring_spsc_head __arena *he
 
 	cast_kern(slots);
 
-	arena_atomic_store(&head->capacity, capacity, ARENA_RELAXED);
-	arena_atomic_store(&head->mask, capacity - 1, ARENA_RELAXED);
-	arena_atomic_store(&head->c_head, 0, ARENA_RELAXED);
-	arena_atomic_store(&head->p_tail, 0, ARENA_RELAXED);
+	head->capacity = capacity;
+	head->mask = capacity - 1;
+	head->c_head = 0;
+	head->p_tail = 0;
 
 	cast_user(slots);
 	arena_atomic_store(&head->slots, slots, ARENA_RELAXED);
@@ -167,8 +167,8 @@ static inline int ds_ck_ring_spsc_insert_c(struct ds_ck_ring_spsc_head __arena *
 
 	slot = &head->slots[producer];
 	cast_kern(slot);
-	arena_atomic_store(&slot->key, key, ARENA_RELAXED);
-	arena_atomic_store(&slot->value, value, ARENA_RELAXED);
+	slot->key = key;
+	slot->value = value;
 	arena_atomic_store(&head->p_tail, next, ARENA_RELEASE);
 
 	return DS_SUCCESS;
@@ -248,8 +248,8 @@ static inline int ds_ck_ring_spsc_delete_c(struct ds_ck_ring_spsc_head __arena *
 	slot = &head->slots[consumer];
 	cast_kern(slot);
 	if (out) {
-		out->key = arena_atomic_load(&slot->key, ARENA_RELAXED);
-		out->value = arena_atomic_load(&slot->value, ARENA_RELAXED);
+		out->key = slot->key;
+		out->value = slot->value;
 	}
 
 	next = (consumer + 1) & head->mask;
