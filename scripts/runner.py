@@ -14,7 +14,7 @@ from typing import List
 
 def find_executables() -> List[str]:
     """Find compiled executables in ./build."""
-    candidates = ['skeleton', 'skeleton_msqueue', 'skeleton_vyukhov', 'skeleton_mpsc', 'skeleton_bst', 'skeleton_folly_spsc', 'skeleton_bintree']
+    candidates = ['skeleton_msqueue', 'skeleton_vyukhov', 'skeleton_folly_spsc', 'skeleton_ck_fifo_spsc', 'skeleton_ck_ring_spsc', 'skeleton_ck_stack_upmc']
     executables = []
     
     for exe in candidates:
@@ -181,6 +181,8 @@ def main():
     if len(sys.argv) > 1:
         # Filter executables based on command line arguments
         filter_set = set(sys.argv[1:])
+        print("Filter Set Input: ", filter_set)
+        print(executables)
         executables = [exe for exe in executables if exe in filter_set]
         print(f"Filtered executables to run: {executables}")
     
