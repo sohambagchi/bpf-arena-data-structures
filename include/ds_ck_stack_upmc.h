@@ -58,7 +58,7 @@ static inline bool ds_ck_stack_upmc_isempty_lkmm(const ds_ck_stack_upmc_head_t *
 	if (!stack)
 		return true;
 
-	return smp_load_acquire(&stack->head) == NULL;
+	return READ_ONCE(stack->head) == NULL;
 }
 
 #ifndef __BPF__
@@ -243,13 +243,13 @@ ds_ck_stack_upmc_pop_upmc_lkmm(ds_ck_stack_upmc_head_t *stack)
 		return NULL;
 
 	cast_kern(stack);
-	head = smp_load_acquire(&stack->head);
+	head = READ_ONCE(stack->head);
 
 	while (head != NULL && can_loop) {
 		cast_kern(head);
 		next = head->next;
 		observed = arena_atomic_cmpxchg(&stack->head, head, next,
-					       ARENA_ACQUIRE, ARENA_RELAXED);
+					       ARENA_RELAXED, ARENA_RELAXED);
 		if (observed == head) {
 			arena_atomic_sub(&stack->count, 1, ARENA_RELAXED);
 			return head;
@@ -310,14 +310,14 @@ static inline bool ds_ck_stack_upmc_trypop_upmc_lkmm(ds_ck_stack_upmc_head_t *st
 		return false;
 
 	cast_kern(stack);
-	head = smp_load_acquire(&stack->head);
+	head = READ_ONCE(stack->head);
 	if (head == NULL)
 		return false;
 
 	cast_kern(head);
 	next = head->next;
 	if (arena_atomic_cmpxchg(&stack->head, head, next,
-				 ARENA_ACQUIRE, ARENA_RELAXED) != head)
+				 ARENA_RELAXED, ARENA_RELAXED) != head)
 		return false;
 
 	arena_atomic_sub(&stack->count, 1, ARENA_RELAXED);
@@ -479,12 +479,12 @@ static inline int ds_ck_stack_upmc_search_lkmm(ds_ck_stack_upmc_head_t *stack, _
 	if (!stack)
 		return DS_ERROR_INVALID;
 
-	cursor = smp_load_acquire(&stack->head);
+	cursor = READ_ONCE(stack->head);
 	for (iterations = 0; cursor != NULL && iterations < 100000 && can_loop; iterations++) {
 		cast_kern(cursor);
 		if (cursor->data.key == key)
 			return DS_SUCCESS;
-		cursor = smp_load_acquire(&cursor->next);
+		cursor = READ_ONCE(cursor->next);
 	}
 
 	return DS_ERROR_NOT_FOUND;
@@ -528,23 +528,23 @@ static inline int ds_ck_stack_upmc_verify_lkmm(ds_ck_stack_upmc_head_t *stack)
 	if (!stack)
 		return DS_ERROR_INVALID;
 
-	slow = smp_load_acquire(&stack->head);
+	slow = READ_ONCE(stack->head);
 	fast = slow;
 
 	while (fast != NULL && can_loop) {
 		ds_ck_stack_upmc_entry_t *fast_next;
 
 		cast_kern(fast);
-		fast_next = smp_load_acquire(&fast->next);
+		fast_next = READ_ONCE(fast->next);
 		if (fast_next == NULL)
 			return DS_SUCCESS;
 
 		cast_kern(fast_next);
-		fast = smp_load_acquire(&fast_next->next);
+		fast = READ_ONCE(fast_next->next);
 
 		if (slow != NULL) {
 			cast_kern(slow);
-			slow = smp_load_acquire(&slow->next);
+			slow = READ_ONCE(slow->next);
 		}
 
 		if (slow != NULL && slow == fast)

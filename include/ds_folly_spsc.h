@@ -167,8 +167,9 @@ int ds_spsc_insert_lkmm(struct ds_spsc_queue_head __arena *head, __u64 key, __u6
 		next_record = 0;
 	}
 
-	/* Check against read index (ACQUIRE: synchronize with Consumer) */
-	__u32 current_read = smp_load_acquire(&head->read_idx.idx);
+	/* Check against read index (LKMM: control dependency from read_idx
+	 * to subsequent data writes provides ordering; acquire not needed) */
+	__u32 current_read = READ_ONCE(head->read_idx.idx);
 	
 	if (next_record != current_read) {
 		/* Space available. Perform the write. */
@@ -544,7 +545,8 @@ bool ds_spsc_is_full_lkmm(struct ds_spsc_queue_head __arena *head)
 {
 	cast_kern(head);
 	
-	__u32 r = smp_load_acquire(&head->read_idx.idx);
+	/* LKMM: read_idx only used in comparison; stale value is safe */
+	__u32 r = READ_ONCE(head->read_idx.idx);
 	__u32 w = READ_ONCE(head->write_idx.idx);
 	__u32 s = head->size;
 	

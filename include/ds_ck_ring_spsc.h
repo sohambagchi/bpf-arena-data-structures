@@ -62,7 +62,7 @@ static inline int ds_ck_ring_spsc_init_lkmm(struct ds_ck_ring_spsc_head __arena 
 	head->p_tail = 0;
 
 	cast_user(slots);
-	head->slots = slots;
+	WRITE_ONCE(head->slots, slots);
 
 	return DS_SUCCESS;
 }
@@ -124,8 +124,8 @@ static inline int ds_ck_ring_spsc_insert_lkmm(struct ds_ck_ring_spsc_head __aren
 	if (!head->slots)
 		return DS_ERROR_INVALID;
 
-	/* CK enqueue order: consumer(acquire), producer(relaxed), next/full test. */
-	consumer = smp_load_acquire(&head->c_head);
+	/* LKMM: c_head only used for comparison; stale value is safe (reports full) */
+	consumer = READ_ONCE(head->c_head);
 	producer = READ_ONCE(head->p_tail);
 	next = (producer + 1) & head->mask;
 
@@ -207,7 +207,8 @@ static inline int ds_ck_ring_spsc_delete_lkmm(struct ds_ck_ring_spsc_head __aren
 	if (consumer == producer)
 		return DS_ERROR_NOT_FOUND;
 
-	barrier();
+	/* LKMM: acquire on p_tail above already provides ordering;
+	 * redundant barrier removed */
 	slot = &head->slots[consumer];
 	cast_kern(slot);
 	if (out) {
@@ -327,8 +328,8 @@ static inline __u32 ds_ck_ring_spsc_size_lkmm(struct ds_ck_ring_spsc_head __aren
 	__u32 producer;
 
 	cast_kern(head);
-	consumer = smp_load_acquire(&head->c_head);
-	producer = smp_load_acquire(&head->p_tail);
+	consumer = READ_ONCE(head->c_head);
+	producer = READ_ONCE(head->p_tail);
 	return (producer - consumer) & head->mask;
 }
 
@@ -394,7 +395,7 @@ static inline bool ds_ck_ring_spsc_is_full_lkmm(struct ds_ck_ring_spsc_head __ar
 	__u32 next;
 
 	cast_kern(head);
-	consumer = smp_load_acquire(&head->c_head);
+	consumer = READ_ONCE(head->c_head);
 	producer = READ_ONCE(head->p_tail);
 	next = (producer + 1) & head->mask;
 	return next == consumer;
