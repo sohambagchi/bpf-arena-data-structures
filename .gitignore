@@ -7,3 +7,4 @@ AGENT.md
 ./usertest*
 .gemini
 .opencode/
+*/__pycache__/

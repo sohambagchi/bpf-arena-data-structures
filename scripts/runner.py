@@ -7,7 +7,7 @@ import os
 import subprocess
 import multiprocessing
 import time
-import sys
+import argparse
 from pathlib import Path
 from typing import List
 
@@ -61,7 +61,7 @@ def touch_file_worker(file_id: int, core_id: int, ready_event, start_event, stop
         pass
 
 
-def run_executable_with_concurrent_touches(executable: str, duration: int = 10):
+def run_executable_with_concurrent_touches(executable: str, duration: int = 10, show_output: bool = False):
     """
     Run executable with concurrent file touches on separate cores.
     
@@ -102,8 +102,8 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10):
     start_time = time.time()
     exe_process = subprocess.Popen(
         [f'./{executable}'],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=None if show_output else subprocess.PIPE,
+        stderr=None if show_output else subprocess.PIPE,
         text=True
     )
     
@@ -166,6 +166,19 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10):
 
 def main():
     """Main entry point."""
+    parser = argparse.ArgumentParser(description="BPF arena executable test runner")
+    parser.add_argument(
+        "executables",
+        nargs="*",
+        help="Optional executable names/paths to run (e.g. skeleton_msqueue or build/skeleton_msqueue)",
+    )
+    parser.add_argument(
+        "--show-output",
+        action="store_true",
+        help="Stream executable stdout/stderr live to the terminal",
+    )
+    args = parser.parse_args()
+
     print("BPF Arena Data Structures Test Runner")
     print("=" * 60)
     
@@ -178,12 +191,13 @@ def main():
     
     print(f"\nFound {len(executables)} executable(s)")
     
-    if len(sys.argv) > 1:
+    if args.executables:
         # Filter executables based on command line arguments
-        filter_set = set(sys.argv[1:])
-        print("Filter Set Input: ", filter_set)
-        print(executables)
-        executables = [exe for exe in executables if exe in filter_set]
+        filter_set = set(args.executables)
+        executables = [
+            exe for exe in executables
+            if exe in filter_set or os.path.basename(exe) in filter_set
+        ]
         print(f"Filtered executables to run: {executables}")
     
     print(f"CPU count: {multiprocessing.cpu_count()}")
@@ -191,7 +205,11 @@ def main():
     # Run each executable
     results = []
     for exe in executables:
-        result = run_executable_with_concurrent_touches(exe, duration=10)
+        result = run_executable_with_concurrent_touches(
+            exe,
+            duration=10,
+            show_output=args.show_output,
+        )
         results.append(result)
     
     # Summary
