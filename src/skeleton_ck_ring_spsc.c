@@ -1,16 +1,23 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#include <errno.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 #include <unistd.h>
-#include <signal.h>
-#include <bpf/libbpf.h>
+
 #include <bpf/bpf.h>
+#include <bpf/libbpf.h>
 
 #include "ds_api.h"
 #include "ds_ck_ring_spsc.h"
 #include "skeleton_ck_ring_spsc.skel.h"
+
+#define CK_RING_SPSC_QUEUE_CAPACITY 128
 
 struct test_config {
 	bool verify;
@@ -23,134 +30,221 @@ static struct test_config config = {
 };
 
 static struct skeleton_ck_ring_spsc_bpf *skel;
-static volatile bool stop_test;
-static __u64 dequeued_count;
-static __u64 dequeue_failures;
+static volatile sig_atomic_t stop_test;
+static pthread_t relay_thread;
+static bool relay_thread_started;
+static __u64 ku_dequeued_count;
+static __u64 uk_enqueued_count;
 
-static void poll_and_dequeue(void)
+__attribute__((noinline)) void ck_ring_spsc_kernel_consume_trigger(void)
 {
-	struct ds_ck_ring_spsc_head *head = &skel->arena->global_ds_head;
-	struct ds_kv data;
-	int result;
-	__u64 empty_polls = 0;
-
-	if (!head || !head->slots) {
-		printf("Queue not initialized, waiting for LSM hook trigger...\n");
-		while ((!head || !head->slots) && !stop_test)
-			head = &skel->arena->global_ds_head;
-		if (stop_test)
-			return;
-	}
-
-	printf("Starting continuous polling (Ctrl+C to stop)...\n");
-	printf("Ring capacity: %u usable slots (%u total)\n\n",
-	       head->capacity - 1, head->capacity);
-
-	while (!stop_test) {
-		result = ds_ck_ring_spsc_pop_c(head, &data);
-
-		if (result == DS_SUCCESS) {
-			printf("Dequeued element %llu: pid=%llu, ts=%llu\n",
-			       dequeued_count, data.key, data.value);
-			dequeued_count++;
-			empty_polls = 0;
-			continue;
-		}
-
-		if (result == DS_ERROR_NOT_FOUND) {
-			empty_polls++;
-			if (empty_polls % 100000000 == 0)
-				printf("Still polling... (dequeued so far: %llu)\n", dequeued_count);
-			continue;
-		}
-
-		printf("Dequeue error: %d\n", result);
-		dequeue_failures++;
-	}
-
-	printf("\nStopped polling. Total dequeued: %llu\n", dequeued_count);
-}
-
-static int verify_data_structure(void)
-{
-	struct ds_ck_ring_spsc_head *head = &skel->arena->global_ds_head;
-	int result;
-
-	printf("\nVerifying CK SPSC ring from userspace...\n");
-
-	if (!head || !head->slots) {
-		printf("Queue not initialized\n");
-		return DS_ERROR_INVALID;
-	}
-
-	result = ds_ck_ring_spsc_verify_c(head);
-	if (result == DS_SUCCESS) {
-		printf("CK SPSC ring verification PASSED\n");
-		printf("  Size: %u\n", ds_ck_ring_spsc_size_c(head));
-		printf("  c_head: %u\n", head->c_head);
-		printf("  p_tail: %u\n", head->p_tail);
-	} else {
-		printf("CK SPSC ring verification FAILED (error %d)\n", result);
-	}
-
-	return result;
-}
-
-static void print_statistics(void)
-{
-	struct ds_ck_ring_spsc_head *head = &skel->arena->global_ds_head;
-
-	printf("\n============================================================\n");
-	printf("                 CK RING SPSC STATISTICS                    \n");
-	printf("============================================================\n\n");
-
-	printf("Kernel-Side Operations (Producer - inode_create LSM hook):\n");
-	printf("  Total insert attempts: %llu\n", skel->bss->total_kernel_ops);
-	printf("  Insert failures:       %llu\n", skel->bss->total_kernel_failures);
-
-	printf("\nUserspace Operations (Consumer - continuous polling):\n");
-	printf("  Elements dequeued:     %llu\n", dequeued_count);
-	printf("  Dequeue failures:      %llu\n", dequeue_failures);
-
-	printf("\nRing State:\n");
-	if (head && head->slots) {
-		__u32 remaining = ds_ck_ring_spsc_size_c(head);
-		__u64 total_produced = skel->bss->total_kernel_ops - skel->bss->total_kernel_failures;
-		__u64 total_accounted = dequeued_count + remaining;
-
-		printf("  Remaining:             %u\n", remaining);
-		printf("  Usable capacity:       %u\n", head->capacity - 1);
-		printf("  c_head:                %u\n", head->c_head);
-		printf("  p_tail:                %u\n", head->p_tail);
-		printf("\nData Flow Analysis:\n");
-		printf("  Successfully inserted: %llu\n", total_produced);
-		printf("  Dequeued + Remaining:  %llu\n", total_accounted);
-		if (total_produced == total_accounted)
-			printf("  No data loss detected\n");
-		else
-			printf("  Discrepancy: %lld elements\n",
-			       (long long)(total_produced - total_accounted));
-	} else {
-		printf("  Ring not initialized\n");
-	}
-
-	printf("\n============================================================\n\n");
+	asm volatile("" ::: "memory");
 }
 
 static void signal_handler(int sig)
 {
-	printf("\nReceived signal %d, stopping consumer...\n", sig);
-	stop_test = true;
+	(void)sig;
+	stop_test = 1;
+}
+
+static int setup_userspace_allocator(void)
+{
+	size_t arena_bytes;
+	size_t alloc_bytes;
+	void *alloc_base;
+	long page_size;
+
+	page_size = sysconf(_SC_PAGESIZE);
+	if (page_size <= 0)
+		return -1;
+
+	arena_bytes = (size_t)bpf_map__max_entries(skel->maps.arena) * (size_t)page_size;
+	if (arena_bytes <= (size_t)page_size)
+		return -1;
+
+	alloc_base = (void *)((char *)skel->arena + (size_t)page_size);
+	alloc_bytes = arena_bytes - (size_t)page_size;
+	bpf_arena_userspace_set_range(alloc_base, alloc_bytes);
+
+	printf("Arena alloc range: base=%p size=%zu KB\n", alloc_base, alloc_bytes / 1024);
+	return 0;
+}
+
+static int attach_programs(void)
+{
+	struct bpf_link *lsm_link;
+	struct bpf_link *consume_link;
+	struct bpf_uprobe_opts uprobe_opts = {
+		.sz = sizeof(uprobe_opts),
+		.func_name = "ck_ring_spsc_kernel_consume_trigger",
+	};
+	int err;
+
+	lsm_link = bpf_program__attach_lsm(skel->progs.lsm_inode_create);
+	err = libbpf_get_error(lsm_link);
+	if (err)
+		return err;
+	skel->links.lsm_inode_create = lsm_link;
+
+	consume_link = bpf_program__attach_uprobe_opts(
+		skel->progs.bpf_ck_ring_spsc_consume,
+		getpid(),
+		"/proc/self/exe",
+		0,
+		&uprobe_opts);
+	err = libbpf_get_error(consume_link);
+	if (err)
+		return err;
+	skel->links.bpf_ck_ring_spsc_consume = consume_link;
+
+	return 0;
+}
+
+static void *relay_worker(void *arg)
+{
+	struct ds_ck_ring_spsc_head *head_ku = &skel->arena->global_ds_head_ku;
+	struct ds_ck_ring_spsc_head *head_uk = &skel->arena->global_ds_head_uk;
+	struct ds_kv data;
+	bool uk_initialized = false;
+	int ret;
+
+	(void)arg;
+
+	printf("UserThread: waiting for CKRingSPSCKU initialization...\n");
+	while (!stop_test) {
+		if (head_ku->slots)
+			break;
+	}
+	if (stop_test)
+		return NULL;
+
+	printf("UserThread: relay loop started (KU -> UK)\n");
+
+	while (!stop_test) {
+		if (!uk_initialized) {
+			if (!head_uk->slots) {
+				ret = ds_ck_ring_spsc_init_c(head_uk, CK_RING_SPSC_QUEUE_CAPACITY);
+				if (ret != DS_SUCCESS)
+					continue;
+			}
+			uk_initialized = true;
+		}
+
+		ret = ds_ck_ring_spsc_pop_c(head_ku, &data);
+		if (ret == DS_SUCCESS) {
+			int ins_ret;
+
+			ku_dequeued_count++;
+			ins_ret = ds_ck_ring_spsc_insert_c(head_uk, data.key, data.value);
+			if (ins_ret == DS_SUCCESS)
+				uk_enqueued_count++;
+			continue;
+		}
+
+		if (ret == DS_ERROR_NOT_FOUND || ret == DS_ERROR_INVALID)
+			continue;
+	}
+
+	return NULL;
+}
+
+static void trigger_kernel_consumer_on_exit(void)
+{
+	__u64 initial_consumed;
+	__u64 target_consumed;
+	__u64 attempts = 0;
+	__u64 max_attempts;
+
+	initial_consumed = skel->bss->total_kernel_consumed;
+	target_consumed = initial_consumed + uk_enqueued_count;
+	max_attempts = uk_enqueued_count + 1024;
+
+	printf("MainThread: triggering kernel consumer uprobe...\n");
+
+	if (uk_enqueued_count == 0) {
+		ck_ring_spsc_kernel_consume_trigger();
+		return;
+	}
+
+	while (attempts < max_attempts &&
+	       skel->bss->total_kernel_consumed < target_consumed) {
+		ck_ring_spsc_kernel_consume_trigger();
+		attempts++;
+	}
+
+	printf("MainThread: consume triggers=%llu consumed=%llu target=%llu\n",
+	       (unsigned long long)attempts,
+	       (unsigned long long)skel->bss->total_kernel_consumed,
+	       (unsigned long long)target_consumed);
+}
+
+static int verify_data_structure(void)
+{
+	struct ds_ck_ring_spsc_head *head_ku = &skel->arena->global_ds_head_ku;
+	struct ds_ck_ring_spsc_head *head_uk = &skel->arena->global_ds_head_uk;
+	int ku_result = DS_SUCCESS;
+	int uk_result = DS_SUCCESS;
+
+	printf("Verifying CK ring queues from userspace...\n");
+
+	if (head_ku->slots)
+		ku_result = ds_ck_ring_spsc_verify_c(head_ku);
+	if (head_uk->slots)
+		uk_result = ds_ck_ring_spsc_verify_c(head_uk);
+
+	if (ku_result == DS_SUCCESS && uk_result == DS_SUCCESS) {
+		printf("Verification PASSED (KU=%d UK=%d)\n", ku_result, uk_result);
+		return DS_SUCCESS;
+	}
+
+	printf("Verification FAILED (KU=%d UK=%d)\n", ku_result, uk_result);
+	return DS_ERROR_INVALID;
+}
+
+static void print_statistics(void)
+{
+	struct ds_ck_ring_spsc_head *head_ku = &skel->arena->global_ds_head_ku;
+	struct ds_ck_ring_spsc_head *head_uk = &skel->arena->global_ds_head_uk;
+	__u32 ku_size = head_ku->slots ? ds_ck_ring_spsc_size_c(head_ku) : 0;
+	__u32 uk_size = head_uk->slots ? ds_ck_ring_spsc_size_c(head_uk) : 0;
+
+	printf("\n============================================================\n");
+	printf("                CK RING SPSC RELAY STATISTICS               \n");
+	printf("============================================================\n");
+	printf("Kernel producer (inode_create -> KU):\n");
+	printf("  ops=%llu failures=%llu\n",
+	       (unsigned long long)skel->bss->total_kernel_prod_ops,
+	       (unsigned long long)skel->bss->total_kernel_prod_failures);
+
+	printf("Kernel consumer (uprobe pop from UK):\n");
+	printf("  ops=%llu failures=%llu consumed=%llu\n",
+	       (unsigned long long)skel->bss->total_kernel_consume_ops,
+	       (unsigned long long)skel->bss->total_kernel_consume_failures,
+	       (unsigned long long)skel->bss->total_kernel_consumed);
+
+	printf("Userspace relay:\n");
+	printf("  KU popped=%llu UK pushed=%llu\n",
+	       (unsigned long long)ku_dequeued_count,
+	       (unsigned long long)uk_enqueued_count);
+
+	printf("Queue states:\n");
+	printf("  KU size=%u\n", ku_size);
+	printf("  UK size=%u\n", uk_size);
+	printf("============================================================\n\n");
 }
 
 static void print_usage(const char *prog)
 {
 	printf("Usage: %s [OPTIONS]\n\n", prog);
-	printf("Test CK-faithful SPSC ring with BPF arena\n\n");
+	printf("CK Ring SPSC relay test (kernel->user->kernel lanes)\n\n");
 	printf("OPTIONS:\n");
-	printf("  -v      Verify ring integrity on exit\n");
+	printf("  -v      Verify both queues on exit\n");
 	printf("  -s      Print statistics on exit (default: enabled)\n");
-	printf("  -h      Show this help\n");
+	printf("  -h      Show this help\n\n");
+	printf("Flow:\n");
+	printf("  inode_create -> CKRingSPSCKU (kernel producer)\n");
+	printf("  UserThread relays KU -> UK (busy loop)\n");
+	printf("  Ctrl+C triggers uprobe-based kernel consumer on UK\n");
 }
 
 static int parse_args(int argc, char **argv)
@@ -179,7 +273,7 @@ static int parse_args(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
-	int err = 0;
+	int err;
 
 	if (parse_args(argc, argv) < 0)
 		return 1;
@@ -187,34 +281,50 @@ int main(int argc, char **argv)
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
 
-	printf("Loading BPF program...\n");
-	skel = skeleton_ck_ring_spsc_bpf__open();
+	printf("Loading BPF program for CK ring SPSC relay...\n");
+	skel = skeleton_ck_ring_spsc_bpf__open_and_load();
 	if (!skel) {
-		fprintf(stderr, "Failed to open BPF skeleton\n");
+		fprintf(stderr, "Failed to open and load BPF skeleton\n");
 		return 1;
 	}
 
-	err = skeleton_ck_ring_spsc_bpf__load(skel);
+	err = setup_userspace_allocator();
 	if (err) {
-		fprintf(stderr, "Failed to load BPF skeleton: %d\n", err);
+		fprintf(stderr, "Failed to set userspace arena allocator range\n");
 		goto cleanup;
 	}
 
-	err = skeleton_ck_ring_spsc_bpf__attach(skel);
+	err = attach_programs();
 	if (err) {
 		fprintf(stderr, "Failed to attach BPF programs: %d\n", err);
 		goto cleanup;
 	}
 
-	printf("BPF programs attached successfully\n");
-	printf("Ring is lazily initialized on first inode_create trigger\n\n");
+	err = pthread_create(&relay_thread, NULL, relay_worker, NULL);
+	if (err) {
+		fprintf(stderr, "Failed to create relay thread: %s\n", strerror(err));
+		err = -1;
+		goto cleanup;
+	}
+	relay_thread_started = true;
 
-	poll_and_dequeue();
+	printf("MainThread: attached. Trigger inode_create events in another shell.\n");
+	printf("Press Ctrl+C to stop and invoke kernel consumer trigger.\n");
+
+	while (!stop_test)
+		pause();
+
+	if (relay_thread_started)
+		pthread_join(relay_thread, NULL);
+
+	trigger_kernel_consumer_on_exit();
 
 	if (config.verify)
 		verify_data_structure();
 	if (config.print_stats)
 		print_statistics();
+
+	err = 0;
 
 cleanup:
 	skeleton_ck_ring_spsc_bpf__destroy(skel);

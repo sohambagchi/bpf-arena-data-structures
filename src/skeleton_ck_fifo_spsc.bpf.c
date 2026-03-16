@@ -24,54 +24,20 @@ struct {
 
 int config_key_range = 1000;
 
-struct ds_ck_fifo_spsc_head __arena *ds_head;
-struct ds_ck_fifo_spsc_head __arena global_ds_head;
+struct ds_ck_fifo_spsc_head __arena global_ds_head_ku;
+struct ds_ck_fifo_spsc_head __arena global_ds_head_uk;
 
-__u64 total_kernel_ops = 0;
-__u64 total_kernel_failures = 0;
-bool initialized = false;
-
-static __always_inline int handle_operation(struct ds_operation *op)
-{
-	int result = DS_ERROR_INVALID;
-
-	if (!ds_head)
-		return DS_ERROR_INVALID;
-
-	switch (op->type) {
-	case DS_OP_INIT:
-		result = ds_ck_fifo_spsc_init_lkmm(ds_head);
-		if (result == DS_SUCCESS)
-			initialized = true;
-		break;
-	case DS_OP_INSERT:
-		result = ds_ck_fifo_spsc_insert_lkmm(ds_head, op->kv.key, op->kv.value);
-		break;
-	case DS_OP_DELETE:
-	case DS_OP_POP:
-		result = ds_ck_fifo_spsc_pop_lkmm(ds_head, &op->kv);
-		break;
-	case DS_OP_SEARCH:
-		result = ds_ck_fifo_spsc_search_lkmm(ds_head, op->kv.key);
-		break;
-	case DS_OP_VERIFY:
-		result = ds_ck_fifo_spsc_verify_lkmm(ds_head);
-		break;
-	default:
-		result = DS_ERROR_INVALID;
-	}
-
-	op->result = result;
-	total_kernel_ops++;
-	if (result != DS_SUCCESS)
-		total_kernel_failures++;
-
-	return result;
-}
+__u64 total_kernel_prod_ops = 0;
+__u64 total_kernel_prod_failures = 0;
+__u64 total_kernel_consume_ops = 0;
+__u64 total_kernel_consume_failures = 0;
+__u64 total_kernel_consumed = 0;
+bool initialized_ku = false;
 
 SEC("lsm.s/inode_create")
 int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t mode)
 {
+	struct ds_ck_fifo_spsc_head __arena *head = &global_ds_head_ku;
 	int result;
 	__u64 pid;
 	__u64 ts;
@@ -80,29 +46,51 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 	(void)dentry;
 	(void)mode;
 
-	/* Lazy initialization on first trigger */
-	if (!initialized) {
-		ds_head = &global_ds_head;
-		result = ds_ck_fifo_spsc_init_lkmm(ds_head);
+	if (!initialized_ku) {
+		result = ds_ck_fifo_spsc_init_lkmm(head);
 		if (result != DS_SUCCESS) {
-			total_kernel_failures++;
+			total_kernel_prod_failures++;
 			return 0;
 		}
-		initialized = true;
+		initialized_ku = true;
 	}
 
-	ds_head = &global_ds_head;
-
-	/* Producer operation: insert (PID, timestamp) */
 	pid = bpf_get_current_pid_tgid() >> 32;
 	ts = bpf_ktime_get_ns();
-	result = ds_ck_fifo_spsc_insert_lkmm(ds_head, pid, ts);
+	result = ds_ck_fifo_spsc_insert_lkmm(head, pid, ts);
 
-	total_kernel_ops++;
+	total_kernel_prod_ops++;
 	if (result != DS_SUCCESS)
-		total_kernel_failures++;
+		total_kernel_prod_failures++;
 
 	return 0;
+}
+
+SEC("uprobe.s")
+int bpf_ck_fifo_spsc_consume(struct pt_regs *ctx)
+{
+	struct ds_ck_fifo_spsc_head __arena *head = &global_ds_head_uk;
+	struct ds_kv out = {};
+	int ret;
+
+	(void)ctx;
+
+	if (!head->fifo.head || !head->fifo.tail) {
+		total_kernel_consume_ops++;
+		total_kernel_consume_failures++;
+		return DS_ERROR_INVALID;
+	}
+
+	ret = ds_ck_fifo_spsc_pop_lkmm(head, &out);
+	total_kernel_consume_ops++;
+	if (ret == DS_SUCCESS) {
+		total_kernel_consumed++;
+		bpf_printk("ck_fifo_spsc consume key=%llu value=%llu\n", out.key, out.value);
+	}
+	else
+		total_kernel_consume_failures++;
+
+	return ret;
 }
 
 char _license[] SEC("license") = "GPL";
