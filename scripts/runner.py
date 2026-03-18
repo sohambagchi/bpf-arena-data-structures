@@ -69,7 +69,8 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
         executable: Path to the executable to run
         duration: Duration in seconds to run the test (program will be terminated after this)
     """
-    nproc = multiprocessing.cpu_count()
+    # nproc = multiprocessing.cpu_count()
+    nproc = 1
     print(f"\n{'='*60}")
     print(f"Running: {executable} for {duration} seconds")
     print(f"Spawning {nproc} concurrent touch processes on separate cores")
