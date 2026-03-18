@@ -22,48 +22,67 @@ struct {
 #include "ds_api.h"
 #include "ds_ck_stack_upmc.h"
 
-struct ds_ck_stack_upmc_head __arena *ds_head;
-struct ds_ck_stack_upmc_head __arena global_ds_head;
+struct ds_ck_stack_upmc_head __arena global_ds_head_ku;
+struct ds_ck_stack_upmc_head __arena global_ds_head_uk;
 
-__u64 total_kernel_ops = 0;
-__u64 total_kernel_failures = 0;
-bool initialized = false;
-
-static __always_inline int init_data_structure(void)
-{
-	if (initialized)
-		return DS_SUCCESS;
-
-	ds_head = &global_ds_head;
-	ds_ck_stack_upmc_init_lkmm(ds_head);
-	initialized = true;
-	return DS_SUCCESS;
-}
+__u64 total_kernel_prod_ops = 0;
+__u64 total_kernel_prod_failures = 0;
+__u64 total_kernel_consume_ops = 0;
+__u64 total_kernel_consume_failures = 0;
+__u64 total_kernel_consumed = 0;
+bool initialized_ku = false;
+bool initialized_uk = false;
 
 SEC("lsm.s/inode_create")
 int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t mode)
 {
+	struct ds_ck_stack_upmc_head __arena *head = &global_ds_head_ku;
 	__u64 pid;
 	__u64 ts;
 	int result;
 
-	if (!initialized) {
-		result = init_data_structure();
-		if (result != DS_SUCCESS) {
-			total_kernel_failures++;
-			return 0;
-		}
+	(void)dir;
+	(void)dentry;
+	(void)mode;
+
+	if (!initialized_ku) {
+		ds_ck_stack_upmc_init_lkmm(head);
+		initialized_ku = true;
 	}
 
 	pid = bpf_get_current_pid_tgid() >> 32;
 	ts = bpf_ktime_get_ns();
-	result = ds_ck_stack_upmc_insert_lkmm(ds_head, pid, ts);
+	result = ds_ck_stack_upmc_insert_lkmm(head, pid, ts);
 
-	total_kernel_ops++;
+	total_kernel_prod_ops++;
 	if (result != DS_SUCCESS)
-		total_kernel_failures++;
+		total_kernel_prod_failures++;
 
 	return 0;
+}
+
+SEC("uprobe.s")
+int bpf_ck_stack_upmc_consume(struct pt_regs *ctx)
+{
+	struct ds_ck_stack_upmc_head __arena *head = &global_ds_head_uk;
+	struct ds_kv out = {};
+	int ret;
+
+	(void)ctx;
+
+	if (!initialized_uk)
+		return DS_ERROR_INVALID;
+
+	ret = ds_ck_stack_upmc_pop_lkmm(head, &out);
+	total_kernel_consume_ops++;
+	if (ret == DS_SUCCESS) {
+		total_kernel_consumed++;
+		bpf_printk("ck_stack_upmc consume key=%llu value=%llu\n", out.key, out.value);
+	}
+	else
+		total_kernel_consume_failures++;
+
+	return ret;
 }
 
 char LICENSE[] SEC("license") = "GPL";

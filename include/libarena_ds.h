@@ -217,20 +217,125 @@ static inline void bpf_arena_free(void __arena *addr)
  * ======================================================================== */
 
 #include <stdatomic.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <string.h>
+#include <unistd.h>
 
 /**
- * In userspace, we don't allocate - we only access arena memory
- * that was allocated by the BPF side. These are stubs.
+ * Userspace-side arena allocator bootstrap.
+ *
+ * The caller should provide a writable arena range after loading BPF
+ * (e.g. from skel->arena plus the map size). Allocation mirrors the kernel
+ * page-fragment layout so kernel-side bpf_arena_free() can consume nodes
+ * produced from userspace.
  */
+static void *bpf_arena_userspace_base;
+static size_t bpf_arena_userspace_size;
+static size_t bpf_arena_userspace_page_size;
+static size_t bpf_arena_userspace_next_page_off;
+static void *bpf_arena_userspace_cur_page;
+static size_t bpf_arena_userspace_cur_offset;
+static atomic_flag bpf_arena_userspace_lock = ATOMIC_FLAG_INIT;
+
+static inline void bpf_arena_userspace_set_range(void *base, size_t size)
+{
+	uintptr_t start;
+	uintptr_t aligned_start;
+	size_t aligned_size;
+	long page_sz;
+
+	page_sz = sysconf(_SC_PAGESIZE);
+	if (page_sz <= 0)
+		page_sz = 4096;
+	bpf_arena_userspace_page_size = (size_t)page_sz;
+
+	start = (uintptr_t)base;
+	aligned_start = (start + bpf_arena_userspace_page_size - 1) &
+			~(uintptr_t)(bpf_arena_userspace_page_size - 1);
+
+	if (!base || size == 0 || aligned_start >= start + size) {
+		bpf_arena_userspace_base = NULL;
+		bpf_arena_userspace_size = 0;
+		bpf_arena_userspace_next_page_off = 0;
+		bpf_arena_userspace_cur_page = NULL;
+		bpf_arena_userspace_cur_offset = 0;
+		return;
+	}
+
+	aligned_size = size - (aligned_start - start);
+	aligned_size &= ~(bpf_arena_userspace_page_size - 1);
+
+	bpf_arena_userspace_base = (void *)aligned_start;
+	bpf_arena_userspace_size = aligned_size;
+	bpf_arena_userspace_next_page_off = 0;
+	bpf_arena_userspace_cur_page = NULL;
+	bpf_arena_userspace_cur_offset = 0;
+}
+
 static inline void __arena* bpf_arena_alloc(unsigned int size __attribute__((unused)))
 {
-	return NULL;
+	void *page;
+	unsigned long long *obj_cnt;
+	size_t offset;
+	size_t aligned;
+
+	if (!bpf_arena_userspace_base ||
+	    bpf_arena_userspace_size == 0 ||
+	    bpf_arena_userspace_page_size == 0)
+		return NULL;
+
+	aligned = round_up((size_t)size, 8);
+	if (aligned == 0 || aligned >= bpf_arena_userspace_page_size - 8)
+		return NULL;
+
+	while (atomic_flag_test_and_set_explicit(&bpf_arena_userspace_lock, memory_order_acquire)) {
+	}
+
+	page = bpf_arena_userspace_cur_page;
+	if (!page || bpf_arena_userspace_cur_offset < aligned) {
+		if (bpf_arena_userspace_next_page_off > bpf_arena_userspace_size ||
+		    bpf_arena_userspace_page_size >
+			bpf_arena_userspace_size - bpf_arena_userspace_next_page_off) {
+			atomic_flag_clear_explicit(&bpf_arena_userspace_lock, memory_order_release);
+			return NULL;
+		}
+
+		page = (char *)bpf_arena_userspace_base + bpf_arena_userspace_next_page_off;
+		bpf_arena_userspace_next_page_off += bpf_arena_userspace_page_size;
+		bpf_arena_userspace_cur_page = page;
+		bpf_arena_userspace_cur_offset = bpf_arena_userspace_page_size - 8;
+
+		obj_cnt = (unsigned long long *)((char *)page +
+						bpf_arena_userspace_page_size - 8);
+		*obj_cnt = 0;
+	}
+
+	offset = bpf_arena_userspace_cur_offset - aligned;
+	obj_cnt = (unsigned long long *)((char *)page +
+					bpf_arena_userspace_page_size - 8);
+	(*obj_cnt)++;
+	bpf_arena_userspace_cur_offset = offset;
+
+	atomic_flag_clear_explicit(&bpf_arena_userspace_lock, memory_order_release);
+
+	return (void __arena *)((char *)page + offset);
 }
 
 static inline void bpf_arena_free(void __arena *addr __attribute__((unused)))
 {
-	/* No-op in userspace */
+	void *page;
+	unsigned long long *obj_cnt;
+
+	if (!addr || bpf_arena_userspace_page_size == 0)
+		return;
+
+	page = (void *)((uintptr_t)addr & ~(uintptr_t)(bpf_arena_userspace_page_size - 1));
+	obj_cnt = (unsigned long long *)((char *)page +
+					bpf_arena_userspace_page_size - 8);
+
+	if (*obj_cnt > 0)
+		(*obj_cnt)--;
 }
 
 /* ========================================================================

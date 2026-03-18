@@ -443,12 +443,17 @@ static inline int ds_msqueue_pop_c(struct ds_msqueue __arena *queue, struct ds_k
 	int max_retries = 10;
 	int retry_count = 0;
 
+	/* Guard userspace caller mistakes that can surface as runner SIGSEGV (-11). */
 	if (!queue || !data)
 		return DS_ERROR_INVALID;
 
 	while (retry_count < max_retries && can_loop) {
 		head = arena_atomic_load(&queue->head, ARENA_ACQUIRE);
 		tail = arena_atomic_load(&queue->tail, ARENA_ACQUIRE);
+
+		/* Defend rare metadata corruption/races under high runner load (SIGSEGV -11). */
+		if (!head || !tail)
+			return DS_ERROR_INVALID;
 
 		cast_kern(head);
 
@@ -468,6 +473,8 @@ static inline int ds_msqueue_pop_c(struct ds_msqueue __arena *queue, struct ds_k
 		if (head == tail) {
 			struct ds_msqueue_elem __arena *next_elem_tail;
 			next_elem_tail = (void __arena *)__msqueue_list_entry(next, struct ds_msqueue_elem, node);
+			if (!next_elem_tail)
+				return DS_ERROR_INVALID;
 			(void)arena_atomic_cmpxchg(&queue->tail, tail, next_elem_tail, ARENA_RELEASE, ARENA_RELAXED);
 			retry_count++;
 			continue;
@@ -475,6 +482,8 @@ static inline int ds_msqueue_pop_c(struct ds_msqueue __arena *queue, struct ds_k
 
 		struct ds_msqueue_elem __arena *next_elem;
 		next_elem = (void __arena *)__msqueue_list_entry(next, struct ds_msqueue_elem, node);
+		if (!next_elem)
+			return DS_ERROR_INVALID;
 
 		cast_kern(next_elem);
 		data->key = next_elem->data.key;

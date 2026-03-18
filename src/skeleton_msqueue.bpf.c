@@ -46,82 +46,19 @@ struct {
  * GLOBAL STATE
  * ======================================================================== */
 
-/* Configuration (set by userspace before running) */
-int config_key_range = 1000;
+/* kernel-producer -> user-consumer queue */
+struct ds_msqueue __arena global_ds_queue_ku;
 
-/* DS_API_INSERT: Declare your data structure head here */
-struct ds_msqueue __arena *ds_queue;
-struct ds_msqueue __arena global_ds_queue;
+/* user-producer -> kernel-consumer queue */
+struct ds_msqueue __arena global_ds_queue_uk;
 
 /* Statistics and control */
-__u64 total_kernel_ops = 0;
-__u64 total_kernel_failures = 0;
-bool initialized = false;
-
-/* ========================================================================
- * OPERATION DISPATCH
- * ======================================================================== */
-
-/**
- * handle_operation - Execute a data structure operation
- * @op: The operation to execute
- * 
- * This function dispatches operations to the appropriate data structure
- * handler based on the operation type.
- * 
- * DS_API_INSERT: Add cases for your data structure operations here
- * 
- * NOTE: Simplified design - kernel only does inserts via LSM hook,
- * userspace threads poll/search the data structure.
- */
-static __always_inline int handle_operation(struct ds_operation *op)
-{
-	int result = DS_ERROR_INVALID;
-	
-	if (!ds_queue)
-		return DS_ERROR_INVALID;
-	
-	switch (op->type) {
-	case DS_OP_INIT:
-		/* DS_API_INSERT: Call your init function */
-		result = ds_msqueue_init_lkmm(ds_queue);
-		initialized = true;
-		break;
-		
-	case DS_OP_INSERT:
-		/* DS_API_INSERT: Call your insert function */
-		result = ds_msqueue_insert_lkmm(ds_queue, op->kv.key, op->kv.value);
-		break;
-		
-	case DS_OP_DELETE:
-	case DS_OP_POP:
-		/* DS_API_INSERT: Call your pop function */
-		result = ds_msqueue_pop_lkmm(ds_queue, &op->kv);
-		break;
-		
-	case DS_OP_SEARCH:
-		/* DS_API_INSERT: Call your search function */
-		result = ds_msqueue_search_lkmm(ds_queue, op->kv.key);
-		break;
-		
-	case DS_OP_VERIFY:
-		/* DS_API_INSERT: Call your verify function */
-		result = ds_msqueue_verify_lkmm(ds_queue);
-		break;
-		
-	default:
-		result = DS_ERROR_INVALID;
-	}
-	
-	op->result = result;
-	
-	/* Update statistics */
-	total_kernel_ops++;
-	if (result != DS_SUCCESS)
-		total_kernel_failures++;
-	
-	return result;
-}
+__u64 total_kernel_prod_ops = 0;
+__u64 total_kernel_prod_failures = 0;
+__u64 total_kernel_consume_ops = 0;
+__u64 total_kernel_consume_failures = 0;
+__u64 total_kernel_consumed = 0;
+bool initialized_ku = false;
 
 /* ========================================================================
  * KERNEL-SIDE OPERATIONS - LSM Hooks
@@ -136,17 +73,23 @@ static __always_inline int handle_operation(struct ds_operation *op)
 SEC("lsm.s/inode_create")
 int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t mode)
 {
+	struct ds_msqueue __arena *ds_queue;
 	int result;
-	ds_queue = &global_ds_queue;
+
+	(void)dir;
+	(void)dentry;
+	(void)mode;
+
+	ds_queue = &global_ds_queue_ku;
 	
 	/* Lazy initialization on first use */
-	if (!initialized) {
+	if (!initialized_ku) {
 		result = ds_msqueue_init_lkmm(ds_queue);
 		if (result != DS_SUCCESS) {
-			total_kernel_failures++;
+			total_kernel_prod_failures++;
 			return 0;
 		}
-		initialized = true;
+		initialized_ku = true;
 	}
 	
 	__u64 pid;
@@ -157,11 +100,42 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 	result = ds_msqueue_insert_lkmm(ds_queue, pid, ts);
 	
 	/* Update statistics */
-	total_kernel_ops++;
+	total_kernel_prod_ops++;
 	if (result != DS_SUCCESS)
-		total_kernel_failures++;
+		total_kernel_prod_failures++;
 	
 	return 0; /* LSM returns 0 to allow operation */
+}
+
+SEC("uprobe.s")
+int bpf_msq_consume(struct pt_regs *ctx)
+{
+	struct ds_msqueue __arena *q = &global_ds_queue_uk;
+	struct ds_msqueue_elem __arena *head;
+	struct ds_msqueue_elem __arena *tail;
+	struct ds_kv data = {};
+	int ret;
+
+	(void)ctx;
+
+	head = READ_ONCE(q->head);
+	tail = READ_ONCE(q->tail);
+	if (!head || !tail) {
+		total_kernel_consume_ops++;
+		total_kernel_consume_failures++;
+		return DS_ERROR_INVALID;
+	}
+
+	ret = ds_msqueue_pop_lkmm(q, &data);
+	total_kernel_consume_ops++;
+	if (ret == DS_SUCCESS) {
+		total_kernel_consumed++;
+		bpf_printk("msqueue consume key=%llu value=%llu\n", data.key, data.value);
+	} else {
+		total_kernel_consume_failures++;
+	}
+
+	return ret;
 }
 
 /* ========================================================================

@@ -1,248 +1,256 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Userspace Skeleton for Folly SPSC Queue Testing
- * 
- * SPSC Design (Single-Producer Single-Consumer):
- * - Kernel (Producer):  LSM hook on inode_create inserts (PID, timestamp)
- * - Userspace (Consumer): This program continuously polls and dequeues elements
- * 
- * This is the CONSUMER side, using arena_atomic operations to safely read
- * elements from the ring buffer without locks.
- * 
- * USAGE:
- *   ./skeleton_folly_spsc [OPTIONS]
- *   
- * OPTIONS:
- *   -q N    Queue size (default: 256, must be >= 2)
- *   -v      Verify data structure integrity on exit
- *   -s      Print statistics on exit (default: enabled)
- *   -h      Show this help
- */
 
+#include <errno.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <errno.h>
-#include <time.h>
-#include <signal.h>
 #include <sys/types.h>
-#include <sys/wait.h>
-#include <bpf/libbpf.h>
-#include <bpf/bpf.h>
+#include <unistd.h>
 
-/* Include data structure headers */
+#include <bpf/bpf.h>
+#include <bpf/libbpf.h>
+
 #include "ds_api.h"
 #include "ds_folly_spsc.h"
 #include "skeleton_folly_spsc.skel.h"
 
-/* ========================================================================
- * CONFIGURATION
- * ======================================================================== */
+#define FOLLY_SPSC_QUEUE_SIZE 128
 
 struct test_config {
 	bool verify;
 	bool print_stats;
 };
 
-/* Default configuration */
 static struct test_config config = {
 	.verify = false,
 	.print_stats = true,
 };
 
-/* ========================================================================
- * GLOBAL STATE
- * ======================================================================== */
+static struct skeleton_folly_spsc_bpf *skel;
+static volatile sig_atomic_t stop_test;
+static pthread_t relay_thread;
+static bool relay_thread_started;
+static __u64 ku_dequeued_count;
+static __u64 uk_enqueued_count;
 
-static struct skeleton_folly_spsc_bpf *skel = NULL;
-static volatile bool stop_test = false;
-static __u64 dequeued_count = 0;
-static __u64 dequeue_failures = 0;
-
-/* ========================================================================
- * POLLING AND DEQUEUE (CONSUMER)
- * ======================================================================== */
-
-/**
- * poll_and_dequeue - Continuously poll and dequeue elements
- * 
- * This is the CONSUMER in the SPSC design. It continuously polls the
- * ring buffer and dequeues elements as they become available.
- */
-static void poll_and_dequeue()
+__attribute__((noinline)) void folly_spsc_kernel_consume_trigger(void)
 {
-	struct ds_spsc_queue_head *head = &skel->arena->global_ds_head;
-	struct ds_kv data;
-	int result;
-	__u64 empty_polls = 0;
-	
-	if (!head || !head->records) {
-		printf("Queue not initialized, waiting for LSM hook trigger...\n");
-		/* Keep polling until initialized */
-		while ((!head || !head->records) && !stop_test) {
-			head = &skel->arena->global_ds_head;
-		}
-		if (stop_test)
-			return;
-	}
-	
-	printf("Starting continuous polling (Ctrl+C to stop)...\n");
-	printf("Queue capacity: %u elements (size: %u)\n\n", 
-	       head->size - 1, head->size);
-	
-	while (!stop_test) {
-		result = ds_spsc_delete_c(head, &data);
-		
-		if (result == DS_SUCCESS) {
-			printf("Dequeued element %llu: pid=%llu, ts=%llu\n", 
-			       dequeued_count, data.key, data.value);
-			dequeued_count++;
-			empty_polls = 0; /* Reset empty poll counter */
-		} else if (result == DS_ERROR_NOT_FOUND) {
-			/* Queue empty, keep polling (busy-wait) */
-			empty_polls++;
-			
-			/* Print periodic status every 100M empty polls */
-			if (empty_polls % 100000000 == 0) {
-				printf("Still polling... (dequeued so far: %llu)\n", 
-				       dequeued_count);
-			}
-			continue;
-		} else {
-			/* Some other error */
-			printf("Dequeue error: %d\n", result);
-			dequeue_failures++;
-		}
-	}
-	
-	printf("\nStopped polling. Total dequeued: %llu\n", dequeued_count);
+	asm volatile("" ::: "memory");
 }
-
-/* ========================================================================
- * VERIFICATION AND STATISTICS
- * ======================================================================== */
-
-/**
- * verify_data_structure - Verify SPSC queue integrity from userspace
- */
-static int verify_data_structure(void)
-{
-	struct ds_spsc_queue_head *head = &skel->arena->global_ds_head;
-	
-	printf("\nVerifying SPSC queue from userspace...\n");
-	
-	if (!head || !head->records) {
-		printf("✗ Queue not initialized\n");
-		return DS_ERROR_INVALID;
-	}
-	
-	int result = ds_spsc_verify_c(head);
-	if (result == DS_SUCCESS) {
-		printf("✓ SPSC queue verification PASSED\n");
-		printf("  Queue size: %u elements\n", ds_spsc_size_c(head));
-		printf("  Read index: %u\n", head->read_idx.idx);
-		printf("  Write index: %u\n", head->write_idx.idx);
-	} else {
-		printf("✗ SPSC queue verification FAILED (error %d)\n", result);
-	}
-		
-	return result;
-}
-
-/**
- * print_statistics - Print kernel and userspace statistics
- */
-static void print_statistics(void)
-{
-	printf("\n");
-	printf("============================================================\n");
-	printf("           SPSC QUEUE STATISTICS                            \n");
-	printf("============================================================\n\n");
-	
-	/* Kernel statistics (Producer) */
-	printf("Kernel-Side Operations (Producer - inode_create LSM hook):\n");
-	printf("  Total insert attempts: %llu\n", skel->bss->total_kernel_ops);
-	printf("  Insert failures:       %llu", skel->bss->total_kernel_failures);
-	if (skel->bss->total_kernel_ops > 0) {
-		double fail_rate = (100.0 * skel->bss->total_kernel_failures) / 
-		                   skel->bss->total_kernel_ops;
-		printf(" (%.2f%%)", fail_rate);
-	}
-	printf("\n");
-	
-	/* Userspace statistics (Consumer) */
-	printf("\nUserspace Operations (Consumer - continuous polling):\n");
-	printf("  Elements dequeued:     %llu\n", dequeued_count);
-	printf("  Dequeue failures:      %llu\n", dequeue_failures);
-	
-	/* Data structure state */
-	printf("\nQueue State:\n");
-	struct ds_spsc_queue_head *head = &skel->arena->global_ds_head;
-	if (head && head->records) {
-		__u32 remaining = ds_spsc_size_c(head);
-		printf("  Elements remaining:    %u\n", remaining);
-		printf("  Queue capacity:        %u\n", head->size - 1);
-		printf("  Read index:            %u\n", head->read_idx.idx);
-		printf("  Write index:           %u\n", head->write_idx.idx);
-		
-		/* Loss analysis */
-		__u64 total_produced = skel->bss->total_kernel_ops - 
-		                       skel->bss->total_kernel_failures;
-		__u64 total_accounted = dequeued_count + remaining;
-		
-		printf("\nData Flow Analysis:\n");
-		printf("  Successfully inserted: %llu\n", total_produced);
-		printf("  Dequeued + Remaining:  %llu\n", total_accounted);
-		if (total_produced == total_accounted) {
-			printf("  ✓ No data loss detected\n");
-		} else {
-			printf("  ⚠ Discrepancy: %lld elements\n", 
-			       (long long)(total_produced - total_accounted));
-		}
-	} else {
-		printf("  Queue not initialized\n");
-	}
-	
-	printf("\n============================================================\n\n");
-}
-
-/* ========================================================================
- * SIGNAL HANDLING
- * ======================================================================== */
 
 static void signal_handler(int sig)
 {
-	printf("\nReceived signal %d, stopping consumer...\n", sig);
-	stop_test = true;
+	(void)sig;
+	stop_test = 1;
 }
 
-/* ========================================================================
- * MAIN PROGRAM
- * ======================================================================== */
+static int setup_userspace_allocator(void)
+{
+	size_t arena_bytes;
+	size_t alloc_bytes;
+	void *alloc_base;
+	long page_size;
+
+	page_size = sysconf(_SC_PAGESIZE);
+	if (page_size <= 0)
+		return -1;
+
+	arena_bytes = (size_t)bpf_map__max_entries(skel->maps.arena) * (size_t)page_size;
+	if (arena_bytes <= (size_t)page_size)
+		return -1;
+
+	alloc_base = (void *)((char *)skel->arena + (size_t)page_size);
+	alloc_bytes = arena_bytes - (size_t)page_size;
+	bpf_arena_userspace_set_range(alloc_base, alloc_bytes);
+
+	printf("Arena alloc range: base=%p size=%zu KB\n", alloc_base, alloc_bytes / 1024);
+	return 0;
+}
+
+static int attach_programs(void)
+{
+	struct bpf_link *lsm_link;
+	struct bpf_link *consume_link;
+	struct bpf_uprobe_opts uprobe_opts = {
+		.sz = sizeof(uprobe_opts),
+		.func_name = "folly_spsc_kernel_consume_trigger",
+	};
+	int err;
+
+	lsm_link = bpf_program__attach_lsm(skel->progs.lsm_inode_create);
+	err = libbpf_get_error(lsm_link);
+	if (err)
+		return err;
+	skel->links.lsm_inode_create = lsm_link;
+
+	consume_link = bpf_program__attach_uprobe_opts(
+		skel->progs.bpf_folly_spsc_consume,
+		getpid(),
+		"/proc/self/exe",
+		0,
+		&uprobe_opts);
+	err = libbpf_get_error(consume_link);
+	if (err)
+		return err;
+	skel->links.bpf_folly_spsc_consume = consume_link;
+
+	return 0;
+}
+
+static void *relay_worker(void *arg)
+{
+	struct ds_spsc_queue_head *head_ku = &skel->arena->global_ds_head_ku;
+	struct ds_spsc_queue_head *head_uk = &skel->arena->global_ds_head_uk;
+	struct ds_kv data;
+	bool uk_initialized = false;
+	int ret;
+
+	(void)arg;
+
+	printf("UserThread: waiting for FollySPSCKU initialization...\n");
+	while (!stop_test) {
+		if (head_ku->records)
+			break;
+	}
+	if (stop_test)
+		return NULL;
+
+	printf("UserThread: relay loop started (KU -> UK)\n");
+
+	while (!stop_test) {
+		if (!uk_initialized) {
+			if (!head_uk->records) {
+				ret = ds_spsc_init_c(head_uk, FOLLY_SPSC_QUEUE_SIZE);
+				if (ret != DS_SUCCESS)
+					continue;
+			}
+			uk_initialized = true;
+		}
+
+		ret = ds_spsc_delete_c(head_ku, &data);
+		if (ret == DS_SUCCESS) {
+			int ins_ret;
+
+			ku_dequeued_count++;
+			ins_ret = ds_spsc_insert_c(head_uk, data.key, data.value);
+			if (ins_ret == DS_SUCCESS)
+				uk_enqueued_count++;
+			continue;
+		}
+
+		if (ret == DS_ERROR_NOT_FOUND || ret == DS_ERROR_INVALID)
+			continue;
+	}
+
+	return NULL;
+}
+
+static void trigger_kernel_consumer_on_exit(void)
+{
+	__u64 initial_consumed;
+	__u64 target_consumed;
+	__u64 attempts = 0;
+	__u64 max_attempts;
+
+	initial_consumed = skel->bss->total_kernel_consumed;
+	target_consumed = initial_consumed + uk_enqueued_count;
+	max_attempts = uk_enqueued_count + 1024;
+
+	printf("MainThread: triggering kernel consumer uprobe...\n");
+
+	if (uk_enqueued_count == 0) {
+		folly_spsc_kernel_consume_trigger();
+		return;
+	}
+
+	while (attempts < max_attempts &&
+	       skel->bss->total_kernel_consumed < target_consumed) {
+		folly_spsc_kernel_consume_trigger();
+		attempts++;
+	}
+
+	printf("MainThread: consume triggers=%llu consumed=%llu target=%llu\n",
+	       (unsigned long long)attempts,
+	       (unsigned long long)skel->bss->total_kernel_consumed,
+	       (unsigned long long)target_consumed);
+}
+
+static int verify_data_structure(void)
+{
+	struct ds_spsc_queue_head *head_ku = &skel->arena->global_ds_head_ku;
+	struct ds_spsc_queue_head *head_uk = &skel->arena->global_ds_head_uk;
+	int ku_result = DS_SUCCESS;
+	int uk_result = DS_SUCCESS;
+
+	printf("Verifying Folly SPSC queues from userspace...\n");
+
+	if (head_ku->records)
+		ku_result = ds_spsc_verify_c(head_ku);
+	if (head_uk->records)
+		uk_result = ds_spsc_verify_c(head_uk);
+
+	if (ku_result == DS_SUCCESS && uk_result == DS_SUCCESS) {
+		printf("Verification PASSED (KU=%d UK=%d)\n", ku_result, uk_result);
+		return DS_SUCCESS;
+	}
+
+	printf("Verification FAILED (KU=%d UK=%d)\n", ku_result, uk_result);
+	return DS_ERROR_INVALID;
+}
+
+static void print_statistics(void)
+{
+	struct ds_spsc_queue_head *head_ku = &skel->arena->global_ds_head_ku;
+	struct ds_spsc_queue_head *head_uk = &skel->arena->global_ds_head_uk;
+	__u32 ku_size = head_ku->records ? ds_spsc_size_c(head_ku) : 0;
+	__u32 uk_size = head_uk->records ? ds_spsc_size_c(head_uk) : 0;
+
+	printf("\n============================================================\n");
+	printf("                 FOLLY SPSC RELAY STATISTICS                \n");
+	printf("============================================================\n");
+	printf("Kernel producer (inode_create -> KU):\n");
+	printf("  ops=%llu failures=%llu\n",
+	       (unsigned long long)skel->bss->total_kernel_prod_ops,
+	       (unsigned long long)skel->bss->total_kernel_prod_failures);
+
+	printf("Kernel consumer (uprobe pop from UK):\n");
+	printf("  ops=%llu failures=%llu consumed=%llu\n",
+	       (unsigned long long)skel->bss->total_kernel_consume_ops,
+	       (unsigned long long)skel->bss->total_kernel_consume_failures,
+	       (unsigned long long)skel->bss->total_kernel_consumed);
+
+	printf("Userspace relay:\n");
+	printf("  KU popped=%llu UK pushed=%llu\n",
+	       (unsigned long long)ku_dequeued_count,
+	       (unsigned long long)uk_enqueued_count);
+
+	printf("Queue states:\n");
+	printf("  KU size=%u\n", ku_size);
+	printf("  UK size=%u\n", uk_size);
+	printf("============================================================\n\n");
+}
 
 static void print_usage(const char *prog)
 {
 	printf("Usage: %s [OPTIONS]\n\n", prog);
-	printf("Test Folly SPSC (Single-Producer Single-Consumer) Queue with BPF arena\n\n");
-	printf("DESIGN:\n");
-	printf("  Producer (Kernel):  LSM hook on inode_create inserts (PID, timestamp)\n");
-	printf("  Consumer (Userspace): Continuously polls and dequeues elements\n\n");
+	printf("Folly SPSC relay test (kernel->user->kernel lanes)\n\n");
 	printf("OPTIONS:\n");
-	printf("  -v      Verify queue integrity on exit\n");
+	printf("  -v      Verify both queues on exit\n");
 	printf("  -s      Print statistics on exit (default: enabled)\n");
-	printf("  -h      Show this help\n");
-	printf("\nKernel inserts trigger automatically on file creation (inode_create)\n");
-	printf("Userspace continuously dequeues and prints elements (Ctrl+C to stop)\n");
-	printf("\nExamples:\n");
-	printf("  %s          # Run with default options\n", prog);
-	printf("  %s -v       # Run and verify on exit\n", prog);
+	printf("  -h      Show this help\n\n");
+	printf("Flow:\n");
+	printf("  inode_create -> FollySPSCKU (kernel producer)\n");
+	printf("  UserThread relays KU -> UK (busy loop)\n");
+	printf("  Ctrl+C triggers uprobe-based kernel consumer on UK\n");
 }
 
 static int parse_args(int argc, char **argv)
 {
 	int opt;
-	
+
 	while ((opt = getopt(argc, argv, "vsh")) != -1) {
 		switch (opt) {
 		case 'v':
@@ -259,61 +267,64 @@ static int parse_args(int argc, char **argv)
 			return -1;
 		}
 	}
-	
+
 	return 0;
 }
 
 int main(int argc, char **argv)
 {
-	int err = 0;
-	
-	/* Parse command line arguments */
+	int err;
+
 	if (parse_args(argc, argv) < 0)
 		return 1;
-	
-	/* Set up signal handlers */
+
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
-	
-	/* Open and load BPF skeleton */
-	printf("Loading BPF program...\n");
-	skel = skeleton_folly_spsc_bpf__open();
+
+	printf("Loading BPF program for Folly SPSC relay...\n");
+	skel = skeleton_folly_spsc_bpf__open_and_load();
 	if (!skel) {
-		fprintf(stderr, "Failed to open BPF skeleton\n");
+		fprintf(stderr, "Failed to open and load BPF skeleton\n");
 		return 1;
 	}
-	
-	err = skeleton_folly_spsc_bpf__load(skel);
+
+	err = setup_userspace_allocator();
 	if (err) {
-		fprintf(stderr, "Failed to load BPF skeleton: %d\n", err);
+		fprintf(stderr, "Failed to set userspace arena allocator range\n");
 		goto cleanup;
 	}
-	
-	/* Attach BPF programs */
-	err = skeleton_folly_spsc_bpf__attach(skel);
+
+	err = attach_programs();
 	if (err) {
 		fprintf(stderr, "Failed to attach BPF programs: %d\n", err);
 		goto cleanup;
 	}
-	
-	printf("BPF programs attached successfully\n");
-	printf("Queue will be lazily initialized on first LSM hook trigger\n");
-	printf("Kernel inserts triggered automatically on file creation (inode_create)\n\n");
-	
-	/* Start continuous polling and dequeuing (Consumer) */
-	poll_and_dequeue();
-	
-	/* Verify queue if requested */
-	if (config.verify) {
+
+	err = pthread_create(&relay_thread, NULL, relay_worker, NULL);
+	if (err) {
+		fprintf(stderr, "Failed to create relay thread: %s\n", strerror(err));
+		err = -1;
+		goto cleanup;
+	}
+	relay_thread_started = true;
+
+	printf("MainThread: attached. Trigger inode_create events in another shell.\n");
+	printf("Press Ctrl+C to stop and invoke kernel consumer trigger.\n");
+
+	while (!stop_test)
+		pause();
+
+	if (relay_thread_started)
+		pthread_join(relay_thread, NULL);
+
+	trigger_kernel_consumer_on_exit();
+
+	if (config.verify)
 		verify_data_structure();
-	}
-	
-	/* Print statistics */
-	if (config.print_stats) {
+	if (config.print_stats)
 		print_statistics();
-	}
-	
-	printf("\nDone!\n");
+
+	err = 0;
 
 cleanup:
 	skeleton_folly_spsc_bpf__destroy(skel);
