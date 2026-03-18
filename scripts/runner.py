@@ -8,8 +8,16 @@ import subprocess
 import multiprocessing
 import time
 import argparse
+import threading
+import re
+from collections import Counter
 from pathlib import Path
 from typing import List
+
+
+TRACE_PIPE_PATH = "/sys/kernel/debug/tracing/trace_pipe"
+TRACE_CLEAR_PATH = "/sys/kernel/debug/tracing/trace"
+TRACE_CONSUME_RE = re.compile(r"consume key=(\d+) value=(\d+)")
 
 
 def find_executables() -> List[str]:
@@ -25,7 +33,7 @@ def find_executables() -> List[str]:
     return executables
 
 
-def touch_file_worker(file_id: int, core_id: int, ready_event, start_event, stop_event):
+def touch_file_worker(file_id: int, core_id: int, ready_event, start_event, stop_event, touch_pids):
     """Worker process that continuously creates/deletes files on a specific core."""
     # Set CPU affinity to run on specific core
     try:
@@ -43,7 +51,9 @@ def touch_file_worker(file_id: int, core_id: int, ready_event, start_event, stop
     while not stop_event.is_set():
         try:
             # Create new file (triggers inode_create) via subprocess (fork/exec)
-            subprocess.call(['touch', filename])
+            touch_process = subprocess.Popen(['touch', filename])
+            touch_pids.append(touch_process.pid)
+            touch_process.wait()
             count += 1
             # Small sleep to avoid overwhelming the system
             time.sleep(0.01)
@@ -59,6 +69,78 @@ def touch_file_worker(file_id: int, core_id: int, ready_event, start_event, stop
             os.remove(filename)
     except:
         pass
+
+
+def clear_trace_buffer():
+    """Clear trace buffer so comparisons use fresh output only."""
+    try:
+        with open(TRACE_CLEAR_PATH, 'w', encoding='utf-8') as trace_file:
+            trace_file.write('')
+    except Exception as e:
+        print(f"Warning: Could not clear trace buffer: {e}")
+
+
+def trace_pipe_reader(output_path: Path, stop_event: threading.Event):
+    """Continuously copy trace_pipe output to a file until stopped."""
+    trace_process = None
+    with output_path.open('w', encoding='utf-8') as output_file:
+        try:
+            trace_process = subprocess.Popen(
+                ['sudo', 'cat', TRACE_PIPE_PATH],
+                stdout=output_file,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+
+            while not stop_event.is_set():
+                if trace_process.poll() is not None:
+                    break
+                time.sleep(0.05)
+        except Exception as e:
+            print(f"Warning: trace_pipe reader failed: {e}")
+        finally:
+            if trace_process and trace_process.poll() is None:
+                trace_process.terminate()
+                try:
+                    trace_process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    trace_process.kill()
+                    trace_process.wait()
+
+
+def validate_trace_output(trace_log_path: Path, executable: str, produced_touch_pids: List[int]) -> bool:
+    """Compare consumed kernel output keys with the recorded touch process PIDs."""
+    ds_name = os.path.basename(executable).replace('skeleton_', '')
+    expected_counter = Counter(produced_touch_pids)
+
+    consumed_keys = []
+    try:
+        trace_lines = trace_log_path.read_text(encoding='utf-8').splitlines()
+    except Exception as e:
+        print(f"  Trace validation FAILED: could not read {trace_log_path}: {e}")
+        return False
+
+    for line in trace_lines:
+        if f"{ds_name} consume" not in line:
+            continue
+        match = TRACE_CONSUME_RE.search(line)
+        if match:
+            consumed_keys.append(int(match.group(1)))
+
+    if not consumed_keys:
+        print("  Trace validation FAILED: no consumer output captured in trace_pipe")
+        return False
+
+    consumed_counter = Counter(consumed_keys)
+    unexpected_keys = consumed_counter - expected_counter
+    if unexpected_keys:
+        unexpected_total = sum(unexpected_keys.values())
+        print(f"  Trace validation FAILED: {unexpected_total} consumed keys were not in initial touch inputs")
+        return False
+
+    print(f"  Trace validation PASSED: {len(consumed_keys)} consumed events matched initial touch input PIDs")
+    print(f"  Trace output file: {trace_log_path}")
+    return True
 
 
 def run_executable_with_concurrent_touches(executable: str, duration: int = 10, show_output: bool = False):
@@ -81,6 +163,7 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
     start_event = manager.Event()
     stop_event = manager.Event()
     ready_events = [manager.Event() for _ in range(nproc)]
+    touch_pids = manager.list()
     
     # Spawn worker processes
     processes = []
@@ -88,7 +171,7 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
         core_id = i % nproc  # Distribute across available cores
         p = multiprocessing.Process(
             target=touch_file_worker,
-            args=(i, core_id, ready_events[i], start_event, stop_event)
+            args=(i, core_id, ready_events[i], start_event, stop_event, touch_pids)
         )
         p.start()
         processes.append(p)
@@ -99,6 +182,16 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
     
     print(f"All {nproc} worker processes ready on separate cores")
     
+    clear_trace_buffer()
+    trace_log_path = Path('build') / f"{Path(executable).name}_trace_pipe.log"
+    trace_stop_event = threading.Event()
+    trace_thread = threading.Thread(
+        target=trace_pipe_reader,
+        args=(trace_log_path, trace_stop_event),
+        daemon=True,
+    )
+    trace_thread.start()
+
     # Start the executable
     start_time = time.time()
     exe_process = subprocess.Popen(
@@ -131,6 +224,11 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
     # Wait for all worker processes to complete
     for p in processes:
         p.join(timeout=2)
+
+    # Stop trace capture and validate trace output against initial input PIDs
+    trace_stop_event.set()
+    trace_thread.join(timeout=3)
+    trace_validation_ok = validate_trace_output(trace_log_path, executable, list(touch_pids))
     
     # Results
     elapsed = end_time - start_time
@@ -161,7 +259,8 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
         'executable': executable,
         'return_code': exe_process.returncode,
         'elapsed_time': elapsed,
-        'total_workers': nproc
+        'total_workers': nproc,
+        'trace_validation_ok': trace_validation_ok,
     }
 
 
@@ -220,6 +319,7 @@ def main():
     for result in results:
         print(f"{result['executable']}:")
         print(f"  Success: {'Yes' if result['return_code'] == 0 else 'No'}")
+        print(f"  Trace match: {'Yes' if result['trace_validation_ok'] else 'No'}")
         print(f"  Time: {result['elapsed_time']:.2f}s")
         print(f"  Workers: {result['total_workers']}")
     
