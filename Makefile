@@ -100,8 +100,8 @@ ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
 # List of all applications to build
 # - BPF_APPS: BPF-backed (need skeleton generation + libbpf)
 # - USERTEST_APPS: pure userspace pthread tests (no BPF, no CLI args)
-BPF_APPS = skeleton skeleton_msqueue skeleton_vyukhov skeleton_mpsc skeleton_bintree skeleton_bst skeleton_folly_spsc skeleton_ck_fifo_spsc skeleton_ck_ring_spsc skeleton_ck_stack_upmc
-USERTEST_APPS = usertest_list usertest_msqueue usertest_mpsc usertest_vyukhov usertest_folly_spsc usertest_bst usertest_bintree usertest_ck_fifo_spsc usertest_ck_ring_spsc usertest_ck_stack_upmc
+BPF_APPS = skeleton_msqueue skeleton_vyukhov skeleton_folly_spsc skeleton_ck_fifo_spsc skeleton_ck_ring_spsc skeleton_ck_stack_upmc
+USERTEST_APPS = usertest_msqueue usertest_vyukhov usertest_folly_spsc usertest_ck_fifo_spsc usertest_ck_ring_spsc usertest_ck_stack_upmc
 APPS = $(BPF_APPS) $(USERTEST_APPS)
 
 # Final binaries (placed in OUT_DIR)
@@ -157,9 +157,8 @@ all: $(BINARIES)
 	@for app in $(BINARIES); do echo "  - $$app"; done
 	@echo ""
 	@echo "Run tests (binaries are placed in $(OUT_DIR)):" 
-	@echo "  sudo $(OUT_DIR)/skeleton -d 5            # run skeleton test (5s)"
 	@echo "  sudo $(OUT_DIR)/skeleton_msqueue -d 5    # run msqueue test (5s)"
-	@echo "  Use -v to enable verification on exit: sudo $(OUT_DIR)/skeleton -v"
+	@echo "  Use -v to enable verification on exit: sudo $(OUT_DIR)/skeleton_msqueue -v"
 
 .PHONY: clean
 clean:
@@ -295,10 +294,7 @@ $(OUT_DIR)/%.S: $(OUT_DIR)/% | $(OUT_DIR)
 test: $(OUT_DIR)/skeleton $(OUT_DIR)/skeleton_msqueue
 	@echo "Running basic tests..."
 	@echo ""
-	@echo "Test 1: Skeleton (list) - 5 second sleep"
-	sudo $(OUT_DIR)/skeleton -d 5 || (echo "FAILED: skeleton"; exit 1)
-	@echo ""
-	@echo "Test 2: Skeleton MS Queue - 5 second sleep"
+	@echo "Test 1: Skeleton MS Queue - 5 second sleep"
 	sudo $(OUT_DIR)/skeleton_msqueue -d 5 || (echo "FAILED: skeleton_msqueue"; exit 1)
 	@echo ""
 	@echo "All tests passed!"
@@ -309,10 +305,7 @@ test-stress: $(OUT_DIR)/skeleton $(OUT_DIR)/skeleton_msqueue
 	@echo "Running stress tests..."
 	@echo "This may take a few minutes..."
 	@echo ""
-	@echo "Stress test 1: Skeleton (list) - 30 second sleep"
-	sudo $(OUT_DIR)/skeleton -d 30 || (echo "FAILED"; exit 1)
-	@echo ""
-	@echo "Stress test 2: Skeleton MS Queue - 30 second sleep"
+	@echo "Stress test 1: Skeleton MS Queue - 30 second sleep"
 	sudo $(OUT_DIR)/skeleton_msqueue -d 30 || (echo "FAILED"; exit 1)
 	@echo ""
 	@echo "Stress tests passed!"
@@ -322,10 +315,7 @@ test-stress: $(OUT_DIR)/skeleton $(OUT_DIR)/skeleton_msqueue
 test-verify: $(OUT_DIR)/skeleton $(OUT_DIR)/skeleton_msqueue
 	@echo "Running verification tests..."
 	@echo ""
-	@echo "Test 1: Skeleton (list) with verification"
-	sudo $(OUT_DIR)/skeleton -d 5 -v || (echo "FAILED"; exit 1)
-	@echo ""
-	@echo "Test 2: Skeleton MS Queue with verification"
+	@echo "Test 1: Skeleton MS Queue with verification"
 	sudo $(OUT_DIR)/skeleton_msqueue -d 5 -v || (echo "FAILED"; exit 1)
 	@echo "Verification tests passed!"
 
@@ -358,10 +348,10 @@ help:
 	@echo "Examples:"
 	@echo "  make                    # Build everything (binaries placed in $(OUT_DIR))"
 	@echo "  make clean && make      # Clean build"
-	@echo "  make V=1 skeleton       # Verbose build of skeleton"
+	@echo "  make V=1 skeleton_msqueue       # Verbose build of skeleton MS Queue"
 	@echo "  make test               # Run smoke tests (invokes built binaries under $(OUT_DIR))"
-	@echo "  sudo $(OUT_DIR)/skeleton     # Run the skeleton test (interactive)"
-	@echo "  sudo $(OUT_DIR)/skeleton -v  # Run with verification on exit"
+	@echo "  sudo $(OUT_DIR)/skeleton_msqueue     # Run the skeleton MS Queue test (interactive)"
+	@echo "  sudo $(OUT_DIR)/skeleton_msqueue -v  # Run with verification on exit"
 
 # ============================================================================
 # MAKE DIRECTIVES
