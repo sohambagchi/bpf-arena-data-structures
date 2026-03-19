@@ -3,6 +3,7 @@
  * 
  * Based on Dmitry Vyukov's lock-free bounded MPMC queue algorithm:
  * https://www.1024cores.net/home/lock-free-algorithms/queues/bounded-mpmc-queue
+ * https://web.archive.org/web/20250810034104/https://www.1024cores.net/home/lock-free-algorithms/queues/bounded-mpmc-queue
  * 
  * Characteristics:
  * - Lock-free multi-producer multi-consumer queue
