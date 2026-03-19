@@ -136,6 +136,7 @@ def validate_trace_output(trace_log_path: Path, executable: str, produced_touch_
     if unexpected_keys:
         unexpected_total = sum(unexpected_keys.values())
         print(f"  Trace validation FAILED: {unexpected_total} consumed keys were not in initial touch inputs")
+        print(f"    Unexpected keys and counts: {dict(unexpected_keys)}")
         return False
 
     print(f"  Trace validation PASSED: {len(consumed_keys)} consumed events matched initial touch input PIDs")
