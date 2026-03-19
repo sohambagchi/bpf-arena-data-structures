@@ -247,7 +247,7 @@ ds_ck_stack_upmc_pop_upmc_lkmm(ds_ck_stack_upmc_head_t *stack)
 
 	while (head != NULL && can_loop) {
 		cast_kern(head);
-		next = head->next;
+		next = READ_ONCE(head->next);
 		observed = arena_atomic_cmpxchg(&stack->head, head, next,
 					       ARENA_RELAXED, ARENA_RELAXED);
 		if (observed == head) {
@@ -315,7 +315,7 @@ static inline bool ds_ck_stack_upmc_trypop_upmc_lkmm(ds_ck_stack_upmc_head_t *st
 		return false;
 
 	cast_kern(head);
-	next = head->next;
+	next = READ_ONCE(head->next);
 	if (arena_atomic_cmpxchg(&stack->head, head, next,
 				 ARENA_RELAXED, ARENA_RELAXED) != head)
 		return false;
