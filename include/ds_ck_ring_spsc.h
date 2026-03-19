@@ -270,56 +270,18 @@ static inline int ds_ck_ring_spsc_delete(struct ds_ck_ring_spsc_head __arena *he
 #endif
 }
 
-static inline int ds_ck_ring_spsc_pop_lkmm(struct ds_ck_ring_spsc_head __arena *head,
-				   struct ds_kv *out)
-{
-	return ds_ck_ring_spsc_delete_lkmm(head, out);
-}
-
-#ifndef __BPF__
-static inline int ds_ck_ring_spsc_pop_c(struct ds_ck_ring_spsc_head __arena *head,
-				 struct ds_kv *out)
-{
-	return ds_ck_ring_spsc_delete_c(head, out);
-}
-#endif
-
 static inline int ds_ck_ring_spsc_pop(struct ds_ck_ring_spsc_head __arena *head,
 				      struct ds_kv *out)
 {
-#ifdef __BPF__
-	return ds_ck_ring_spsc_pop_lkmm(head, out);
-#else
-	return ds_ck_ring_spsc_pop_c(head, out);
-#endif
+	return ds_ck_ring_spsc_delete(head, out);
 }
-
-static inline int ds_ck_ring_spsc_search_lkmm(struct ds_ck_ring_spsc_head __arena *head,
-				      __u64 key)
-{
-	(void)head;
-	(void)key;
-	return DS_ERROR_INVALID;
-}
-
-#ifndef __BPF__
-static inline int ds_ck_ring_spsc_search_c(struct ds_ck_ring_spsc_head __arena *head,
-				   __u64 key)
-{
-	(void)head;
-	(void)key;
-	return DS_ERROR_INVALID;
-}
-#endif
 
 static inline int ds_ck_ring_spsc_search(struct ds_ck_ring_spsc_head __arena *head,
-				 __u64 key)
+__u64 key)
 {
-#ifdef __BPF__
-	return ds_ck_ring_spsc_search_lkmm(head, key);
-#else
-	return ds_ck_ring_spsc_search_c(head, key);
-#endif
+	(void)head;
+	(void)key;
+	return DS_ERROR_INVALID;
 }
 
 static inline __u32 ds_ck_ring_spsc_size_lkmm(struct ds_ck_ring_spsc_head __arena *head)

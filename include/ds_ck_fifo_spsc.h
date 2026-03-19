@@ -30,56 +30,6 @@ struct ds_ck_fifo_spsc_head {
 typedef struct ds_ck_fifo_spsc_head __arena ds_ck_fifo_spsc_head_t;
 typedef struct ds_ck_fifo_spsc_entry __arena ds_ck_fifo_spsc_entry_t;
 
-/* Relaxed pointer access helpers. */
-static inline struct ds_ck_fifo_spsc_entry __arena *
-ds_ck_fifo_spsc_ptr_load_lkmm(struct ds_ck_fifo_spsc_entry __arena * __arena *ptr)
-{
-	return READ_ONCE(*ptr);
-}
-
-static inline void ds_ck_fifo_spsc_ptr_store_lkmm(
-	struct ds_ck_fifo_spsc_entry __arena * __arena *ptr,
-	struct ds_ck_fifo_spsc_entry __arena *value)
-{
-	WRITE_ONCE(*ptr, value);
-}
-
-#ifndef __BPF__
-static inline struct ds_ck_fifo_spsc_entry __arena *
-ds_ck_fifo_spsc_ptr_load_c(struct ds_ck_fifo_spsc_entry __arena * __arena *ptr)
-{
-	return arena_atomic_load(ptr, ARENA_RELAXED);
-}
-
-static inline void ds_ck_fifo_spsc_ptr_store_c(
-	struct ds_ck_fifo_spsc_entry __arena * __arena *ptr,
-	struct ds_ck_fifo_spsc_entry __arena *value)
-{
-	arena_atomic_store(ptr, value, ARENA_RELAXED);
-}
-#endif
-
-static inline struct ds_ck_fifo_spsc_entry __arena *
-ds_ck_fifo_spsc_ptr_load(struct ds_ck_fifo_spsc_entry __arena * __arena *ptr)
-{
-#ifdef __BPF__
-	return ds_ck_fifo_spsc_ptr_load_lkmm(ptr);
-#else
-	return ds_ck_fifo_spsc_ptr_load_c(ptr);
-#endif
-}
-
-static inline void ds_ck_fifo_spsc_ptr_store(
-	struct ds_ck_fifo_spsc_entry __arena * __arena *ptr,
-	struct ds_ck_fifo_spsc_entry __arena *value)
-{
-#ifdef __BPF__
-	ds_ck_fifo_spsc_ptr_store_lkmm(ptr, value);
-#else
-	ds_ck_fifo_spsc_ptr_store_c(ptr, value);
-#endif
-}
-
 static inline void ds_ck_fifo_spsc_fifo_init_lkmm(struct ds_ck_fifo_spsc __arena *fifo,
 						  struct ds_ck_fifo_spsc_entry __arena *stub)
 {
@@ -495,56 +445,18 @@ static inline int ds_ck_fifo_spsc_delete(struct ds_ck_fifo_spsc_head __arena *he
 #endif
 }
 
-static inline int ds_ck_fifo_spsc_pop_lkmm(struct ds_ck_fifo_spsc_head __arena *head,
-					   struct ds_kv *out)
-{
-	return ds_ck_fifo_spsc_delete_lkmm(head, out);
-}
-
-#ifndef __BPF__
-static inline int ds_ck_fifo_spsc_pop_c(struct ds_ck_fifo_spsc_head __arena *head,
-					struct ds_kv *out)
-{
-	return ds_ck_fifo_spsc_delete_c(head, out);
-}
-#endif
-
 static inline int ds_ck_fifo_spsc_pop(struct ds_ck_fifo_spsc_head __arena *head,
 				      struct ds_kv *out)
 {
-#ifdef __BPF__
-	return ds_ck_fifo_spsc_pop_lkmm(head, out);
-#else
-	return ds_ck_fifo_spsc_pop_c(head, out);
-#endif
+	return ds_ck_fifo_spsc_delete(head, out);
 }
-
-static inline int ds_ck_fifo_spsc_search_lkmm(struct ds_ck_fifo_spsc_head __arena *head,
-					      __u64 key)
-{
-	(void)head;
-	(void)key;
-	return DS_ERROR_INVALID;
-}
-
-#ifndef __BPF__
-static inline int ds_ck_fifo_spsc_search_c(struct ds_ck_fifo_spsc_head __arena *head,
-					   __u64 key)
-{
-	(void)head;
-	(void)key;
-	return DS_ERROR_INVALID;
-}
-#endif
 
 static inline int ds_ck_fifo_spsc_search(struct ds_ck_fifo_spsc_head __arena *head,
-					 __u64 key)
+__u64 key)
 {
-#ifdef __BPF__
-	return ds_ck_fifo_spsc_search_lkmm(head, key);
-#else
-	return ds_ck_fifo_spsc_search_c(head, key);
-#endif
+	(void)head;
+	(void)key;
+	return DS_ERROR_INVALID;
 }
 
 static inline int ds_ck_fifo_spsc_verify_lkmm(struct ds_ck_fifo_spsc_head __arena *head)
@@ -562,8 +474,8 @@ static inline int ds_ck_fifo_spsc_verify_lkmm(struct ds_ck_fifo_spsc_head __aren
 	if (!head->fifo.head || !head->fifo.tail || !head->fifo.garbage)
 		return DS_ERROR_CORRUPT;
 
-	cursor = ds_ck_fifo_spsc_ptr_load_lkmm(&head->fifo.head);
-	tail = ds_ck_fifo_spsc_ptr_load_lkmm(&head->fifo.tail);
+	cursor = READ_ONCE(head->fifo.head);
+	tail = READ_ONCE(head->fifo.tail);
 	if (!cursor || !tail)
 		return DS_ERROR_CORRUPT;
 
@@ -571,7 +483,7 @@ static inline int ds_ck_fifo_spsc_verify_lkmm(struct ds_ck_fifo_spsc_head __aren
 		if (cursor == tail)
 			return DS_SUCCESS;
 		cast_kern(cursor);
-		cursor = ds_ck_fifo_spsc_ptr_load_lkmm(&cursor->next);
+		cursor = READ_ONCE(cursor->next);
 		if (!cursor)
 			return DS_ERROR_CORRUPT;
 	}
@@ -595,8 +507,8 @@ static inline int ds_ck_fifo_spsc_verify_c(struct ds_ck_fifo_spsc_head __arena *
 	if (!head->fifo.head || !head->fifo.tail || !head->fifo.garbage)
 		return DS_ERROR_CORRUPT;
 
-	cursor = ds_ck_fifo_spsc_ptr_load_c(&head->fifo.head);
-	tail = ds_ck_fifo_spsc_ptr_load_c(&head->fifo.tail);
+	cursor = head->fifo.head;
+	tail = head->fifo.tail;
 	if (!cursor || !tail)
 		return DS_ERROR_CORRUPT;
 
@@ -604,7 +516,7 @@ static inline int ds_ck_fifo_spsc_verify_c(struct ds_ck_fifo_spsc_head __arena *
 		if (cursor == tail)
 			return DS_SUCCESS;
 		cast_kern(cursor);
-		cursor = ds_ck_fifo_spsc_ptr_load_c(&cursor->next);
+		cursor = cursor->next;
 		if (!cursor)
 			return DS_ERROR_CORRUPT;
 	}
