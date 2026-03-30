@@ -71,6 +71,70 @@ All `build/skeleton_*` binaries:
 - `-s` print statistics (enabled by default)
 - `-h` show usage
 
+## Performance Metrics
+
+All 8 skeleton relay programs automatically collect per-operation latency
+metrics. Measurements are stored in BPF Arena shared memory and printed as a
+statistics table on program exit.
+
+### Measurement categories
+
+Four categories match the relay lane model:
+
+| Category | Side | Description |
+|---|---|---|
+| **LKMM Producer** | kernel | LSM `inode_create` handler inserting into the KU lane |
+| **User Consumer** | userspace | Relay thread popping from the KU lane |
+| **User Producer** | userspace | Relay thread inserting into the UK lane |
+| **LKMM Consumer** | kernel | Uprobe handler popping from the UK lane |
+
+### What is measured
+
+Only the critical section (the lock-free algorithm portion — e.g. CAS retry
+loops) is timed. Memory allocation and other overhead is excluded. Each sample
+records latency in nanoseconds and whether the operation succeeded.
+
+### Clock sources
+
+- **BPF / kernel side**: `bpf_ktime_get_ns()`
+- **Userspace side**: `clock_gettime(CLOCK_MONOTONIC)`
+
+### Storage
+
+A fixed 8192-entry ring buffer per category in arena memory. Wraps around when
+full; running counters are maintained atomically.
+
+```c
+struct ds_metrics_store   // top-level container
+  -> struct ds_metrics_ring[4]   // one per category
+```
+
+### Output format
+
+On program exit, a table is printed per category:
+
+- Total ops
+- Successful ops
+- Success rate %
+- Average latency (all ops)
+- Average latency (successful ops only)
+- Throughput (ops/sec)
+
+### Key API
+
+Header: `include/ds_metrics.h`
+
+```c
+// Time an operation block and record the sample.
+DS_METRICS_RECORD_OP(store, category, op_block, result_var)
+
+// Direct recording function.
+ds_metrics_record(store, category, latency_ns, success)
+
+// Print the statistics table (userspace only).
+ds_metrics_print(store, ds_name)
+```
+
 ## Userspace-only tests
 
 `usertest/*.c` are pthread tests that do not load BPF programs.

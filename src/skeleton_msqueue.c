@@ -25,6 +25,7 @@
 
 #include "ds_api.h"
 #include "ds_msqueue.h"
+#include "ds_metrics.h"
 #include "skeleton_msqueue.skel.h"
 
 struct test_config {
@@ -138,12 +139,16 @@ static void *relay_worker(void *arg)
 			uk_initialized = true;
 		}
 
-		ret = ds_msqueue_pop_c(queue_ku, &data);
+		DS_METRICS_RECORD_OP(&skel->arena->global_metrics, DS_METRICS_USER_CONSUMER, {
+			ret = ds_msqueue_pop_c(queue_ku, &data);
+		}, ret);
 		if (ret == DS_SUCCESS) {
 			int ins_ret;
 
 			ku_dequeued_count++;
-			ins_ret = ds_msqueue_insert_c(queue_uk, data.key, data.value);
+			DS_METRICS_RECORD_OP(&skel->arena->global_metrics, DS_METRICS_USER_PRODUCER, {
+				ins_ret = ds_msqueue_insert_c(queue_uk, data.key, data.value);
+			}, ins_ret);
 			if (ins_ret == DS_SUCCESS)
 				uk_enqueued_count++;
 			continue;
@@ -236,6 +241,7 @@ static void print_statistics(void)
 	printf("Queue states:\n");
 	printf("  KU count=%llu\n", (unsigned long long)queue_ku->count);
 	printf("  UK count=%llu\n", (unsigned long long)queue_uk->count);
+	ds_metrics_print(&skel->arena->global_metrics, "MSQueue");
 	printf("============================================================\n\n");
 }
 

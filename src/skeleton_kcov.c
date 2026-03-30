@@ -15,6 +15,7 @@
 
 #include "ds_api.h"
 #include "ds_kcov.h"
+#include "ds_metrics.h"
 #include "skeleton_kcov.skel.h"
 
 struct test_config {
@@ -128,12 +129,16 @@ static void *relay_worker(void *arg)
 			uk_initialized = true;
 		}
 
-		ret = ds_kcov_pop_c(head_ku, &data);
+		DS_METRICS_RECORD_OP(&skel->arena->global_metrics, DS_METRICS_USER_CONSUMER, {
+			ret = ds_kcov_pop_c(head_ku, &data);
+		}, ret);
 		if (ret == DS_SUCCESS) {
 			int ins_ret;
 
 			ku_dequeued_count++;
-			ins_ret = ds_kcov_insert_c(head_uk, data.key, data.value);
+			DS_METRICS_RECORD_OP(&skel->arena->global_metrics, DS_METRICS_USER_PRODUCER, {
+				ins_ret = ds_kcov_insert_c(head_uk, data.key, data.value);
+			}, ins_ret);
 			if (ins_ret == DS_SUCCESS)
 				uk_enqueued_count++;
 			continue;
@@ -224,6 +229,7 @@ static void print_statistics(void)
 	printf("Buffer states:\n");
 	printf("  KU current entries: (see area[0])\n");
 	printf("  UK current entries: (see area[0])\n");
+	ds_metrics_print(&skel->arena->global_metrics, "KCOV Buffer");
 	printf("============================================================\n\n");
 }
 

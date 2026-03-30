@@ -41,6 +41,7 @@ struct {
  * DS_API_INSERT: Include your data structure headers here
  * ======================================================================== */
 #include "ds_msqueue.h"  /* Michael-Scott Queue implementation */
+#include "ds_metrics.h"
 
 /* ========================================================================
  * GLOBAL STATE
@@ -51,6 +52,8 @@ struct ds_msqueue __arena global_ds_queue_ku;
 
 /* user-producer -> kernel-consumer queue */
 struct ds_msqueue __arena global_ds_queue_uk;
+
+struct ds_metrics_store __arena global_metrics;
 
 /* Statistics and control */
 __u64 total_kernel_prod_ops = 0;
@@ -97,7 +100,9 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 
 	pid = bpf_get_current_pid_tgid() >> 32;
 	ts = bpf_ktime_get_ns();
-	result = ds_msqueue_insert_lkmm(ds_queue, pid, ts);
+	DS_METRICS_RECORD_OP(&global_metrics, DS_METRICS_LKMM_PRODUCER, {
+		result = ds_msqueue_insert_lkmm(ds_queue, pid, ts);
+	}, result);
 	
 	/* Update statistics */
 	total_kernel_prod_ops++;
@@ -126,7 +131,9 @@ int bpf_msq_consume(struct pt_regs *ctx)
 		return DS_ERROR_INVALID;
 	}
 
-	ret = ds_msqueue_pop_lkmm(q, &data);
+	DS_METRICS_RECORD_OP(&global_metrics, DS_METRICS_LKMM_CONSUMER, {
+		ret = ds_msqueue_pop_lkmm(q, &data);
+	}, ret);
 	total_kernel_consume_ops++;
 	if (ret == DS_SUCCESS) {
 		total_kernel_consumed++;

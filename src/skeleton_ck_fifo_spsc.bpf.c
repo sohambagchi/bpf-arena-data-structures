@@ -21,11 +21,13 @@ struct {
 #include "libarena_ds.h"
 #include "ds_api.h"
 #include "ds_ck_fifo_spsc.h"
+#include "ds_metrics.h"
 
 int config_key_range = 1000;
 
 struct ds_ck_fifo_spsc_head __arena global_ds_head_ku;
 struct ds_ck_fifo_spsc_head __arena global_ds_head_uk;
+struct ds_metrics_store __arena global_metrics;
 
 __u64 total_kernel_prod_ops = 0;
 __u64 total_kernel_prod_failures = 0;
@@ -57,7 +59,9 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 
 	pid = bpf_get_current_pid_tgid() >> 32;
 	ts = bpf_ktime_get_ns();
-	result = ds_ck_fifo_spsc_insert(head, pid, ts);
+	DS_METRICS_RECORD_OP(&global_metrics, DS_METRICS_LKMM_PRODUCER, {
+		result = ds_ck_fifo_spsc_insert(head, pid, ts);
+	}, result);
 
 	total_kernel_prod_ops++;
 	if (result != DS_SUCCESS)
@@ -81,7 +85,9 @@ int bpf_ck_fifo_spsc_consume(struct pt_regs *ctx)
 		return DS_ERROR_INVALID;
 	}
 
-	ret = ds_ck_fifo_spsc_pop(head, &out);
+	DS_METRICS_RECORD_OP(&global_metrics, DS_METRICS_LKMM_CONSUMER, {
+		ret = ds_ck_fifo_spsc_pop(head, &out);
+	}, ret);
 	total_kernel_consume_ops++;
 	if (ret == DS_SUCCESS) {
 		total_kernel_consumed++;

@@ -15,6 +15,7 @@
 
 #include "ds_api.h"
 #include "ds_io_uring.h"
+#include "ds_metrics.h"
 #include "skeleton_io_uring.skel.h"
 
 #define IO_URING_RING_ENTRIES 128
@@ -130,12 +131,16 @@ static void *relay_worker(void *arg)
 			uk_initialized = true;
 		}
 
-		ret = ds_io_uring_pop_c(head_ku, &data);
+		DS_METRICS_RECORD_OP(&skel->arena->global_metrics, DS_METRICS_USER_CONSUMER, {
+			ret = ds_io_uring_pop_c(head_ku, &data);
+		}, ret);
 		if (ret == DS_SUCCESS) {
 			int ins_ret;
 
 			ku_dequeued_count++;
-			ins_ret = ds_io_uring_insert_c(head_uk, data.key, data.value);
+			DS_METRICS_RECORD_OP(&skel->arena->global_metrics, DS_METRICS_USER_PRODUCER, {
+				ins_ret = ds_io_uring_insert_c(head_uk, data.key, data.value);
+			}, ins_ret);
 			if (ins_ret == DS_SUCCESS)
 				uk_enqueued_count++;
 			continue;
@@ -232,6 +237,7 @@ static void print_statistics(void)
 	printf("Queue states:\n");
 	printf("  KU size=%u\n", ku_size);
 	printf("  UK size=%u\n", uk_size);
+	ds_metrics_print(&skel->arena->global_metrics, "IO_URING Ring");
 	printf("============================================================\n\n");
 }
 
