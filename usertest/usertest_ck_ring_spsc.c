@@ -61,7 +61,7 @@ static void *consumer_thread(void *arg)
 	uint64_t expected_key = 1;
 
 	while (atomic_load_explicit(&c->consumed, memory_order_relaxed) < c->expected) {
-		int rc = ds_ck_ring_spsc_pop_c(&c->q, &out);
+		int rc = ds_ck_ring_spsc_pop(&c->q, &out);
 		if (rc == DS_SUCCESS) {
 			uint64_t n = atomic_fetch_add_explicit(&c->consumed, 1, memory_order_relaxed) + 1;
 			fprintf(stdout, "consumer: key=%" PRIu64 " value=%" PRIu64 " (n=%" PRIu64 ")\n",

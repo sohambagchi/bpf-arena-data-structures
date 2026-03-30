@@ -20,12 +20,15 @@ struct {
 
 #include "libarena_ds.h"
 #include "ds_api.h"
-#include "ds_ck_fifo_spsc.h"
+#include "ds_kcov.h"
 
-int config_key_range = 1000;
+/* Buffer size in words (area[0] = counter + area[1..N] = data).
+ * With KCOV_WORDS_PER_ENTRY=2: (509-1)/2 = 254 usable entries.
+ * Total bytes: 509 × 8 = 4072 < PAGE_SIZE-8 = 4088 (allocator limit). */
+int config_buf_size = 509;
 
-struct ds_ck_fifo_spsc_head __arena global_ds_head_ku;
-struct ds_ck_fifo_spsc_head __arena global_ds_head_uk;
+struct ds_kcov_buf __arena global_ds_head_ku;
+struct ds_kcov_buf __arena global_ds_head_uk;
 
 __u64 total_kernel_prod_ops = 0;
 __u64 total_kernel_prod_failures = 0;
@@ -37,7 +40,7 @@ bool initialized_ku = false;
 SEC("lsm.s/inode_create")
 int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t mode)
 {
-	struct ds_ck_fifo_spsc_head __arena *head = &global_ds_head_ku;
+	struct ds_kcov_buf __arena *head = &global_ds_head_ku;
 	int result;
 	__u64 pid;
 	__u64 ts;
@@ -47,7 +50,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 	(void)mode;
 
 	if (!initialized_ku) {
-		result = ds_ck_fifo_spsc_init(head);
+		result = ds_kcov_init_lkmm(head, (__u32)config_buf_size);
 		if (result != DS_SUCCESS) {
 			total_kernel_prod_failures++;
 			return 0;
@@ -57,7 +60,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 
 	pid = bpf_get_current_pid_tgid() >> 32;
 	ts = bpf_ktime_get_ns();
-	result = ds_ck_fifo_spsc_insert(head, pid, ts);
+	result = ds_kcov_insert_lkmm(head, pid, ts);
 
 	total_kernel_prod_ops++;
 	if (result != DS_SUCCESS)
@@ -67,25 +70,25 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 }
 
 SEC("uprobe.s")
-int bpf_ck_fifo_spsc_consume(struct pt_regs *ctx)
+int bpf_kcov_consume(struct pt_regs *ctx)
 {
-	struct ds_ck_fifo_spsc_head __arena *head = &global_ds_head_uk;
+	struct ds_kcov_buf __arena *head = &global_ds_head_uk;
 	struct ds_kv out = {};
 	int ret;
 
 	(void)ctx;
 
-	if (!head->fifo.head || !head->fifo.tail) {
+	if (!head->area) {
 		total_kernel_consume_ops++;
 		total_kernel_consume_failures++;
 		return DS_ERROR_INVALID;
 	}
 
-	ret = ds_ck_fifo_spsc_pop(head, &out);
+	ret = ds_kcov_pop_lkmm(head, &out);
 	total_kernel_consume_ops++;
 	if (ret == DS_SUCCESS) {
 		total_kernel_consumed++;
-		bpf_printk("ck_fifo_spsc consume key=%llu value=%llu\n", out.key, out.value);
+		bpf_printk("kcov consume key=%llu value=%llu\n", out.key, out.value);
 	}
 	else
 		total_kernel_consume_failures++;

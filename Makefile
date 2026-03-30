@@ -100,7 +100,7 @@ ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
 # List of all applications to build
 # - BPF_APPS: BPF-backed (need skeleton generation + libbpf)
 # - USERTEST_APPS: pure userspace pthread tests (no BPF, no CLI args)
-BPF_APPS = skeleton_msqueue skeleton_vyukhov skeleton_folly_spsc skeleton_ck_fifo_spsc skeleton_ck_ring_spsc skeleton_ck_stack_upmc
+BPF_APPS = skeleton_msqueue skeleton_vyukhov skeleton_folly_spsc skeleton_ck_fifo_spsc skeleton_ck_ring_spsc skeleton_ck_stack_upmc skeleton_io_uring skeleton_kcov
 USERTEST_APPS = usertest_msqueue usertest_vyukhov usertest_folly_spsc usertest_ck_fifo_spsc usertest_ck_ring_spsc usertest_ck_stack_upmc
 APPS = $(BPF_APPS) $(USERTEST_APPS)
 

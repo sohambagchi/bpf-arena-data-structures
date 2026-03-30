@@ -130,7 +130,7 @@ static void *relay_worker(void *arg)
 			uk_initialized = true;
 		}
 
-		ret = ds_ck_ring_spsc_pop_c(head_ku, &data);
+		ret = ds_ck_ring_spsc_pop(head_ku, &data);
 		if (ret == DS_SUCCESS) {
 			int ins_ret;
 

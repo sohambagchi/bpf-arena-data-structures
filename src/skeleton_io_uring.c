@@ -14,8 +14,10 @@
 #include <bpf/libbpf.h>
 
 #include "ds_api.h"
-#include "ds_ck_fifo_spsc.h"
-#include "skeleton_ck_fifo_spsc.skel.h"
+#include "ds_io_uring.h"
+#include "skeleton_io_uring.skel.h"
+
+#define IO_URING_RING_ENTRIES 128
 
 struct test_config {
 	bool verify;
@@ -27,14 +29,14 @@ static struct test_config config = {
 	.print_stats = true,
 };
 
-static struct skeleton_ck_fifo_spsc_bpf *skel;
+static struct skeleton_io_uring_bpf *skel;
 static volatile sig_atomic_t stop_test;
 static pthread_t relay_thread;
 static bool relay_thread_started;
 static __u64 ku_dequeued_count;
 static __u64 uk_enqueued_count;
 
-__attribute__((noinline)) void ck_fifo_spsc_kernel_consume_trigger(void)
+__attribute__((noinline)) void io_uring_kernel_consume_trigger(void)
 {
 	asm volatile("" ::: "memory");
 }
@@ -74,7 +76,7 @@ static int attach_programs(void)
 	struct bpf_link *consume_link;
 	struct bpf_uprobe_opts uprobe_opts = {
 		.sz = sizeof(uprobe_opts),
-		.func_name = "ck_fifo_spsc_kernel_consume_trigger",
+		.func_name = "io_uring_kernel_consume_trigger",
 	};
 	int err;
 
@@ -85,7 +87,7 @@ static int attach_programs(void)
 	skel->links.lsm_inode_create = lsm_link;
 
 	consume_link = bpf_program__attach_uprobe_opts(
-		skel->progs.bpf_ck_fifo_spsc_consume,
+		skel->progs.bpf_io_uring_consume,
 		getpid(),
 		"/proc/self/exe",
 		0,
@@ -93,24 +95,24 @@ static int attach_programs(void)
 	err = libbpf_get_error(consume_link);
 	if (err)
 		return err;
-	skel->links.bpf_ck_fifo_spsc_consume = consume_link;
+	skel->links.bpf_io_uring_consume = consume_link;
 
 	return 0;
 }
 
 static void *relay_worker(void *arg)
 {
-	struct ds_ck_fifo_spsc_head *head_ku = &skel->arena->global_ds_head_ku;
-	struct ds_ck_fifo_spsc_head *head_uk = &skel->arena->global_ds_head_uk;
+	struct ds_io_uring_ring_head *head_ku = &skel->arena->global_ds_head_ku;
+	struct ds_io_uring_ring_head *head_uk = &skel->arena->global_ds_head_uk;
 	struct ds_kv data;
 	bool uk_initialized = false;
 	int ret;
 
 	(void)arg;
 
-	printf("UserThread: waiting for CKFifoSPSCKU initialization...\n");
+	printf("UserThread: waiting for IO_URING KU initialization...\n");
 	while (!stop_test) {
-		if (head_ku->fifo.head && head_ku->fifo.tail)
+		if (head_ku->entries)
 			break;
 	}
 	if (stop_test)
@@ -120,20 +122,20 @@ static void *relay_worker(void *arg)
 
 	while (!stop_test) {
 		if (!uk_initialized) {
-			if (!head_uk->fifo.head || !head_uk->fifo.tail) {
-				ret = ds_ck_fifo_spsc_init_c(head_uk);
+			if (!head_uk->entries) {
+				ret = ds_io_uring_init_c(head_uk, 128);
 				if (ret != DS_SUCCESS)
 					continue;
 			}
 			uk_initialized = true;
 		}
 
-		ret = ds_ck_fifo_spsc_pop(head_ku, &data);
+		ret = ds_io_uring_pop_c(head_ku, &data);
 		if (ret == DS_SUCCESS) {
 			int ins_ret;
 
 			ku_dequeued_count++;
-			ins_ret = ds_ck_fifo_spsc_insert_c(head_uk, data.key, data.value);
+			ins_ret = ds_io_uring_insert_c(head_uk, data.key, data.value);
 			if (ins_ret == DS_SUCCESS)
 				uk_enqueued_count++;
 			continue;
@@ -160,13 +162,13 @@ static void trigger_kernel_consumer_on_exit(void)
 	printf("MainThread: triggering kernel consumer uprobe...\n");
 
 	if (uk_enqueued_count == 0) {
-		ck_fifo_spsc_kernel_consume_trigger();
+		io_uring_kernel_consume_trigger();
 		return;
 	}
 
 	while (attempts < max_attempts &&
 	       skel->bss->total_kernel_consumed < target_consumed) {
-		ck_fifo_spsc_kernel_consume_trigger();
+		io_uring_kernel_consume_trigger();
 		attempts++;
 	}
 
@@ -178,17 +180,17 @@ static void trigger_kernel_consumer_on_exit(void)
 
 static int verify_data_structure(void)
 {
-	struct ds_ck_fifo_spsc_head *head_ku = &skel->arena->global_ds_head_ku;
-	struct ds_ck_fifo_spsc_head *head_uk = &skel->arena->global_ds_head_uk;
+	struct ds_io_uring_ring_head *head_ku = &skel->arena->global_ds_head_ku;
+	struct ds_io_uring_ring_head *head_uk = &skel->arena->global_ds_head_uk;
 	int ku_result = DS_SUCCESS;
 	int uk_result = DS_SUCCESS;
 
-	printf("Verifying CK FIFO queues from userspace...\n");
+	printf("Verifying IO_URING rings from userspace...\n");
 
-	if (head_ku->fifo.head && head_ku->fifo.tail)
-		ku_result = ds_ck_fifo_spsc_verify_c(head_ku);
-	if (head_uk->fifo.head && head_uk->fifo.tail)
-		uk_result = ds_ck_fifo_spsc_verify_c(head_uk);
+	if (head_ku->entries)
+		ku_result = ds_io_uring_verify_c(head_ku);
+	if (head_uk->entries)
+		uk_result = ds_io_uring_verify_c(head_uk);
 
 	if (ku_result == DS_SUCCESS && uk_result == DS_SUCCESS) {
 		printf("Verification PASSED (KU=%d UK=%d)\n", ku_result, uk_result);
@@ -201,15 +203,15 @@ static int verify_data_structure(void)
 
 static void print_statistics(void)
 {
-	struct ds_ck_fifo_spsc_head *head_ku = &skel->arena->global_ds_head_ku;
-	struct ds_ck_fifo_spsc_head *head_uk = &skel->arena->global_ds_head_uk;
-	bool ku_empty = head_ku->fifo.head && head_ku->fifo.tail ?
-		ds_ck_fifo_spsc_isempty_c(&head_ku->fifo) : true;
-	bool uk_empty = head_uk->fifo.head && head_uk->fifo.tail ?
-		ds_ck_fifo_spsc_isempty_c(&head_uk->fifo) : true;
+	struct ds_io_uring_ring_head *head_ku = &skel->arena->global_ds_head_ku;
+	struct ds_io_uring_ring_head *head_uk = &skel->arena->global_ds_head_uk;
+	__u32 ku_size = head_ku->entries
+		? (head_ku->prod.tail - head_ku->cons.head) : 0;
+	__u32 uk_size = head_uk->entries
+		? (head_uk->prod.tail - head_uk->cons.head) : 0;
 
 	printf("\n============================================================\n");
-	printf("                CK FIFO SPSC RELAY STATISTICS               \n");
+	printf("                  IO_URING RELAY STATISTICS                 \n");
 	printf("============================================================\n");
 	printf("Kernel producer (inode_create -> KU):\n");
 	printf("  ops=%llu failures=%llu\n",
@@ -228,21 +230,21 @@ static void print_statistics(void)
 	       (unsigned long long)uk_enqueued_count);
 
 	printf("Queue states:\n");
-	printf("  KU empty=%s\n", ku_empty ? "yes" : "no");
-	printf("  UK empty=%s\n", uk_empty ? "yes" : "no");
+	printf("  KU size=%u\n", ku_size);
+	printf("  UK size=%u\n", uk_size);
 	printf("============================================================\n\n");
 }
 
 static void print_usage(const char *prog)
 {
 	printf("Usage: %s [OPTIONS]\n\n", prog);
-	printf("CK FIFO SPSC relay test (kernel->user->kernel lanes)\n\n");
+	printf("IO_URING relay test (kernel->user->kernel lanes)\n\n");
 	printf("OPTIONS:\n");
-	printf("  -v      Verify both queues on exit\n");
+	printf("  -v      Verify both rings on exit\n");
 	printf("  -s      Print statistics on exit (default: enabled)\n");
 	printf("  -h      Show this help\n\n");
 	printf("Flow:\n");
-	printf("  inode_create -> CKFifoSPSCKU (kernel producer)\n");
+	printf("  inode_create -> IO_URING KU (kernel producer)\n");
 	printf("  UserThread relays KU -> UK (busy loop)\n");
 	printf("  Ctrl+C triggers uprobe-based kernel consumer on UK\n");
 }
@@ -281,8 +283,8 @@ int main(int argc, char **argv)
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
 
-	printf("Loading BPF program for CK FIFO SPSC relay...\n");
-	skel = skeleton_ck_fifo_spsc_bpf__open_and_load();
+	printf("Loading BPF program for IO_URING relay...\n");
+	skel = skeleton_io_uring_bpf__open_and_load();
 	if (!skel) {
 		fprintf(stderr, "Failed to open and load BPF skeleton\n");
 		return 1;
@@ -327,6 +329,6 @@ int main(int argc, char **argv)
 	err = 0;
 
 cleanup:
-	skeleton_ck_fifo_spsc_bpf__destroy(skel);
+	skeleton_io_uring_bpf__destroy(skel);
 	return err;
 }

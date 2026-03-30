@@ -82,7 +82,7 @@ int bpf_ck_ring_spsc_consume(struct pt_regs *ctx)
 		return DS_ERROR_INVALID;
 	}
 
-	ret = ds_ck_ring_spsc_pop_lkmm(head, &out);
+	ret = ds_ck_ring_spsc_pop(head, &out);
 	total_kernel_consume_ops++;
 	if (ret == DS_SUCCESS) {
 		total_kernel_consumed++;

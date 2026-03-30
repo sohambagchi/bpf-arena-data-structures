@@ -22,7 +22,7 @@ TRACE_CONSUME_RE = re.compile(r"consume key=(\d+) value=(\d+)")
 
 def find_executables() -> List[str]:
     """Find compiled executables in ./build."""
-    candidates = ['skeleton_msqueue', 'skeleton_vyukhov', 'skeleton_folly_spsc', 'skeleton_ck_fifo_spsc', 'skeleton_ck_ring_spsc', 'skeleton_ck_stack_upmc']
+    candidates = ['skeleton_msqueue', 'skeleton_vyukhov', 'skeleton_folly_spsc', 'skeleton_ck_fifo_spsc', 'skeleton_ck_ring_spsc', 'skeleton_ck_stack_upmc', 'skeleton_io_uring', 'skeleton_kcov']
     executables = []
     
     for exe in candidates:

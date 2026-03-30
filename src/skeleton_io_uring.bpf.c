@@ -20,12 +20,12 @@ struct {
 
 #include "libarena_ds.h"
 #include "ds_api.h"
-#include "ds_ck_fifo_spsc.h"
+#include "ds_io_uring.h"
 
-int config_key_range = 1000;
+int config_ring_entries = 128;   /* MUST be power of 2 */
 
-struct ds_ck_fifo_spsc_head __arena global_ds_head_ku;
-struct ds_ck_fifo_spsc_head __arena global_ds_head_uk;
+struct ds_io_uring_ring_head __arena global_ds_head_ku;
+struct ds_io_uring_ring_head __arena global_ds_head_uk;
 
 __u64 total_kernel_prod_ops = 0;
 __u64 total_kernel_prod_failures = 0;
@@ -37,7 +37,7 @@ bool initialized_ku = false;
 SEC("lsm.s/inode_create")
 int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t mode)
 {
-	struct ds_ck_fifo_spsc_head __arena *head = &global_ds_head_ku;
+	struct ds_io_uring_ring_head __arena *head = &global_ds_head_ku;
 	int result;
 	__u64 pid;
 	__u64 ts;
@@ -47,7 +47,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 	(void)mode;
 
 	if (!initialized_ku) {
-		result = ds_ck_fifo_spsc_init(head);
+		result = ds_io_uring_init_lkmm(head, (__u32)config_ring_entries);
 		if (result != DS_SUCCESS) {
 			total_kernel_prod_failures++;
 			return 0;
@@ -57,7 +57,7 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 
 	pid = bpf_get_current_pid_tgid() >> 32;
 	ts = bpf_ktime_get_ns();
-	result = ds_ck_fifo_spsc_insert(head, pid, ts);
+	result = ds_io_uring_insert_lkmm(head, pid, ts);
 
 	total_kernel_prod_ops++;
 	if (result != DS_SUCCESS)
@@ -67,25 +67,25 @@ int BPF_PROG(lsm_inode_create, struct inode *dir, struct dentry *dentry, umode_t
 }
 
 SEC("uprobe.s")
-int bpf_ck_fifo_spsc_consume(struct pt_regs *ctx)
+int bpf_io_uring_consume(struct pt_regs *ctx)
 {
-	struct ds_ck_fifo_spsc_head __arena *head = &global_ds_head_uk;
+	struct ds_io_uring_ring_head __arena *head = &global_ds_head_uk;
 	struct ds_kv out = {};
 	int ret;
 
 	(void)ctx;
 
-	if (!head->fifo.head || !head->fifo.tail) {
+	if (!head->entries) {
 		total_kernel_consume_ops++;
 		total_kernel_consume_failures++;
 		return DS_ERROR_INVALID;
 	}
 
-	ret = ds_ck_fifo_spsc_pop(head, &out);
+	ret = ds_io_uring_pop_lkmm(head, &out);
 	total_kernel_consume_ops++;
 	if (ret == DS_SUCCESS) {
 		total_kernel_consumed++;
-		bpf_printk("ck_fifo_spsc consume key=%llu value=%llu\n", out.key, out.value);
+		bpf_printk("io_uring consume key=%llu value=%llu\n", out.key, out.value);
 	}
 	else
 		total_kernel_consume_failures++;

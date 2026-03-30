@@ -16,8 +16,12 @@
 - `docs/analysis/` additional algorithm notes
 
 ## Source map
-- `include/` data structure headers (`ds_msqueue`, `ds_vyukhov`, `ds_folly_spsc`, `ds_ck_*`)
+- `include/` data structure headers (`ds_msqueue`, `ds_vyukhov`, `ds_folly_spsc`, `ds_ck_*`, `ds_io_uring`, `ds_kcov`)
+  - `include/ds_io_uring.h` BPF arena port of io_uring's SPSC ring memory model
+  - `include/ds_kcov.h` BPF arena port of Linux kcov's flat append buffer
 - `src/` relay apps (`skeleton_*.bpf.c` + `skeleton_*.c`)
+  - `src/skeleton_io_uring.bpf.c` + `src/skeleton_io_uring.c` io_uring ring relay
+  - `src/skeleton_kcov.bpf.c` + `src/skeleton_kcov.c` kcov buffer relay
 - `usertest/` userspace-only pthread tests
 - `scripts/usertests.py` maintained test runner
 
