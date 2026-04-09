@@ -74,3 +74,62 @@ the ordering.  This covers:
 | Vyukov MPMC | Sequence-number protocol inherently requires acq/rel on the sequence field; array indexing has no pointer-chasing chain to exploit |
 | io_uring Ring | Faithful port of Linux io_uring's barrier model; deliberately retains all `smp_load_acquire` / `smp_store_release` |
 | kcov Buffer | No hardware fences on either side -- single-writer model uses only `READ_ONCE`/`WRITE_ONCE` + `barrier()` everywhere |
+
+---
+
+## Annotation Counts
+
+Static count of every annotation site in the producer (insert/enqueue) and
+consumer (pop/dequeue) hot path of each data structure.  Naked loads and
+stores through arena pointers (e.g. `slot->key = key`) are counted as
+**rlx** -- they carry no hardware fence but are still shared-memory
+accesses.  Zeros are omitted.
+
+| Data Structure | Path | acq | rel | rlx | rel-CAS | acq-CAS | rlx-CAS | mb | barrier |
+|---|---|---|---|---|---|---|---|---|---|
+| MS Queue | Prod C | 2 | | 4 | 3 | | | | |
+| | Prod LKMM | | | 6 | 3 | | | | |
+| | Cons C | 4 | | 3 | 1 | 1 | | | |
+| | Cons LKMM | | | 7 | 1 | | 1 | | |
+| Vyukov MPMC | Prod C | 1 | 1 | 5 | | | 1 | | |
+| | Prod LKMM | 1 | 1 | 5 | | | 1 | | |
+| | Cons C | 1 | 1 | 5 | | | 1 | | |
+| | Cons LKMM | 1 | 1 | 5 | | | 1 | | |
+| Folly SPSC | Prod C | 1 | 1 | 3 | | | | | |
+| | Prod LKMM | | 1 | 4 | | | | | |
+| | Cons C | 1 | 1 | 3 | | | | | |
+| | Cons LKMM | 1 | 1 | 3 | | | | | |
+| CK FIFO SPSC | Prod C | | 1 | 6 | | | | | |
+| | Prod LKMM | | 1 | 6 | | | | | |
+| | Cons C | 1 | 1 | 4 | | | | | |
+| | Cons LKMM | | | 6 | | | | | |
+| CK Ring SPSC | Prod C | 1 | 1 | 3 | | | | | |
+| | Prod LKMM | | 1 | 4 | | | | | |
+| | Cons C | 1 | 1 | 3 | | | | 1 | |
+| | Cons LKMM | 1 | 1 | 3 | | | | | |
+| CK Stack UPMC | Prod C | | | 5 | 1 | | | | |
+| | Prod LKMM | | | 5 | 1 | | | | |
+| | Cons C | 1 | | 4 | | 1 | | | |
+| | Cons LKMM | | | 5 | | | 1 | | |
+| io_uring Ring | Prod C | 1 | 1 | 5 | | | | | |
+| | Prod LKMM | 1 | 1 | 5 | | | | | |
+| | Cons C | 1 | 1 | 3 | | | | | |
+| | Cons LKMM | 1 | 1 | 3 | | | | | |
+| kcov Buffer | Prod C | | | 6 | | | | | 1 |
+| | Prod LKMM | | | 6 | | | | | 1 |
+| | Cons C | | | 5 | | | | | 1 |
+| | Cons LKMM | | | 5 | | | | | 1 |
+
+### Totals
+
+| | acq | rel | rlx | rel-CAS | acq-CAS | rlx-CAS | mb | barrier | **total** |
+|---|---|---|---|---|---|---|---|---|---|
+| **All C** | 16 | 10 | 67 | 5 | 2 | 2 | 1 | 2 | **105** |
+| **All LKMM** | 6 | 9 | 78 | 5 | | 4 | | 2 | **104** |
+| **delta (C − LKMM)** | **+10** | **+1** | **−11** | | **+2** | **−2** | **+1** | | **+1** |
+
+The LKMM side eliminates **10 acquire loads**, **2 acquire-CAS**,
+**1 release store**, and **1 full memory barrier** across the eight
+structures -- **14 hardware fences** in total.  Thirteen become relaxed
+operations (11 extra `rlx` + 2 extra `rlx-CAS`); the CK Ring SPSC
+memory barrier is simply dropped (redundant with the acquire on `p_tail`).
