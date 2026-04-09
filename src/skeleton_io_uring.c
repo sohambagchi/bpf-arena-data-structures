@@ -18,7 +18,7 @@
 #include "ds_metrics.h"
 #include "skeleton_io_uring.skel.h"
 
-#define IO_URING_RING_ENTRIES 128
+#define IO_URING_RING_ENTRIES 512
 
 struct test_config {
 	bool verify;
@@ -124,7 +124,7 @@ static void *relay_worker(void *arg)
 	while (!stop_test) {
 		if (!uk_initialized) {
 			if (!head_uk->entries) {
-				ret = ds_io_uring_init_c(head_uk, 128);
+				ret = ds_io_uring_init_c(head_uk, IO_URING_RING_ENTRIES);
 				if (ret != DS_SUCCESS)
 					continue;
 			}

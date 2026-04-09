@@ -24,7 +24,7 @@ struct {
 #include "ds_metrics.h"
 
 int config_key_range = 1000;
-int config_queue_capacity = 128;
+int config_queue_capacity = 512;
 
 struct ds_vyukhov_head __arena global_ds_head_ku;
 struct ds_vyukhov_head __arena global_ds_head_uk;

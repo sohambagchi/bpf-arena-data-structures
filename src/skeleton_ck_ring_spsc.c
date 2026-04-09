@@ -18,7 +18,7 @@
 #include "ds_metrics.h"
 #include "skeleton_ck_ring_spsc.skel.h"
 
-#define CK_RING_SPSC_QUEUE_CAPACITY 128
+#define CK_RING_SPSC_QUEUE_CAPACITY 512
 
 struct test_config {
 	bool verify;

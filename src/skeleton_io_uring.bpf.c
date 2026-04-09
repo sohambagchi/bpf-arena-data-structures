@@ -23,7 +23,7 @@ struct {
 #include "ds_io_uring.h"
 #include "ds_metrics.h"
 
-int config_ring_entries = 128;   /* MUST be power of 2 */
+int config_ring_entries = 512;   /* MUST be power of 2 */
 
 struct ds_io_uring_ring_head __arena global_ds_head_ku;
 struct ds_io_uring_ring_head __arena global_ds_head_uk;

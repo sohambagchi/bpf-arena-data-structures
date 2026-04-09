@@ -18,7 +18,7 @@
 #include "ds_metrics.h"
 #include "skeleton_folly_spsc.skel.h"
 
-#define FOLLY_SPSC_QUEUE_SIZE 128
+#define FOLLY_SPSC_QUEUE_SIZE 512
 
 struct test_config {
 	bool verify;

@@ -12,6 +12,25 @@
 #define round_up(x, y) ((((x)-1) | __round_mask(x, y))+1)
 #endif
 
+/* ========================================================================
+ * MULTI-PAGE ALLOCATION METADATA (shared between BPF and userspace)
+ * ========================================================================
+ *
+ * When an allocation is too large to fit in a single page-fragment slot
+ * (rounded-up size >= PAGE_SIZE - 8), both allocator implementations fall
+ * back to a direct multi-page path.  The last 8 bytes of the last allocated
+ * page store a sentinel word:
+ *
+ *   bits [63:32]  ARENA_MULTI_PAGE_MAGIC  (0xA11ECD << 32)
+ *   bits [31: 0]  number of pages in this allocation
+ *
+ * bpf_arena_free() reads those bytes; if the high half matches the magic
+ * it treats the block as a multi-page allocation and releases all pages.
+ * Otherwise the normal single-page obj_cnt decrement is used.
+ * ======================================================================== */
+#define ARENA_MULTI_PAGE_MAGIC	(0xA11ECDULL << 32)
+#define ARENA_MULTI_PAGE_MASK	(0xFFFFFFFFULL << 32)
+
 #ifdef __BPF__
 
 /* ========================================================================
@@ -164,6 +183,42 @@ static inline void __arena* bpf_arena_refill_page(int cpu)
     return page;
 }
 
+/*
+ * bpf_arena_alloc_large - allocate a contiguous multi-page region
+ *
+ * Called when size >= PAGE_SIZE - 8.  Rounds up to the required number of
+ * pages, allocates them in one bpf_arena_alloc_pages() call, and writes the
+ * ARENA_MULTI_PAGE_MAGIC | page_cnt sentinel into the last 8 bytes of the
+ * last page so that bpf_arena_free() can release the exact number of pages.
+ *
+ * Returns a pointer to the start of the allocation, or NULL on failure.
+ */
+static inline void __arena* bpf_arena_alloc_large(unsigned int size)
+{
+    void __arena *base;
+    __u64 __arena *meta;
+    __u32 page_cnt;
+
+    /* Round up to whole pages */
+    page_cnt = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+
+    /* Reserve 8 bytes at the very end of the last page for metadata */
+    if ((__u64)page_cnt * PAGE_SIZE - 8 < size)
+        page_cnt++;
+
+    base = bpf_arena_alloc_pages(&arena, NULL, page_cnt, NUMA_NO_NODE, 0);
+    if (!base)
+        return NULL;
+
+    cast_kern(base);
+
+    /* Write sentinel in the last 8 bytes of the allocation */
+    meta = base + (__u64)page_cnt * PAGE_SIZE - 8;
+    *meta = ARENA_MULTI_PAGE_MAGIC | (__u64)page_cnt;
+
+    return base;
+}
+
 /* Main allocation function */
 static inline void __arena* bpf_arena_alloc(unsigned int size)
 {
@@ -174,8 +229,10 @@ static inline void __arena* bpf_arena_alloc(unsigned int size)
     int offset;
 
     size = round_up(size, 8);
+
+    /* Large allocation: does not fit in a single page fragment */
     if (size >= PAGE_SIZE - 8)
-        return NULL;
+        return bpf_arena_alloc_large(size);
 
     // CHECK: Do we need to refill?
     // Condition A: We don't have a page yet (!page)
@@ -202,12 +259,23 @@ static inline void __arena* bpf_arena_alloc(unsigned int size)
 
 static inline void bpf_arena_free(void __arena *addr)
 {
-	__u64 __arena *obj_cnt;
+	__u64 __arena *meta;
+	__u64 val;
 
+	/* Align down to the start of the page containing addr */
 	addr = (void __arena *)(((long)addr) & ~(PAGE_SIZE - 1));
-	obj_cnt = addr + PAGE_SIZE - 8;
-	if (--(*obj_cnt) == 0)
-		bpf_arena_free_pages(&arena, addr, 1);
+	meta = addr + PAGE_SIZE - 8;
+	val  = *meta;
+
+	if ((val & ARENA_MULTI_PAGE_MASK) == ARENA_MULTI_PAGE_MAGIC) {
+		/* Multi-page allocation: free all pages at once */
+		__u32 page_cnt = (__u32)(val & 0xFFFFFFFFULL);
+		bpf_arena_free_pages(&arena, addr, page_cnt);
+	} else {
+		/* Single-page fragment: decrement obj_cnt and free when zero */
+		if (--(*meta) == 0)
+			bpf_arena_free_pages(&arena, addr, 1);
+	}
 }
 
 #else /* !__BPF__ */
@@ -286,9 +354,56 @@ static inline void __arena* bpf_arena_alloc(unsigned int size __attribute__((unu
 		return NULL;
 
 	aligned = round_up((size_t)size, 8);
-	if (aligned == 0 || aligned >= bpf_arena_userspace_page_size - 8)
+	if (aligned == 0)
 		return NULL;
 
+	/* ----------------------------------------------------------------
+	 * Large allocation path: does not fit in a single page fragment.
+	 * Consume ceil(aligned / page_size) pages from the arena range,
+	 * writing the ARENA_MULTI_PAGE_MAGIC | page_cnt sentinel into the
+	 * last 8 bytes of the last page so bpf_arena_free() can release
+	 * the right number of pages.
+	 * ---------------------------------------------------------------- */
+	if (aligned >= bpf_arena_userspace_page_size - 8) {
+		size_t page_sz = bpf_arena_userspace_page_size;
+		size_t page_cnt = (aligned + page_sz - 1) / page_sz;
+
+		/* Reserve 8 bytes at the end of the last page for metadata */
+		if (page_cnt * page_sz - 8 < aligned)
+			page_cnt++;
+
+		size_t total = page_cnt * page_sz;
+
+		while (atomic_flag_test_and_set_explicit(&bpf_arena_userspace_lock,
+							 memory_order_acquire)) {
+		}
+
+		if (bpf_arena_userspace_next_page_off + total >
+		    bpf_arena_userspace_size) {
+			atomic_flag_clear_explicit(&bpf_arena_userspace_lock,
+						   memory_order_release);
+			return NULL;
+		}
+
+		void *base = (char *)bpf_arena_userspace_base +
+			     bpf_arena_userspace_next_page_off;
+		bpf_arena_userspace_next_page_off += total;
+
+		atomic_flag_clear_explicit(&bpf_arena_userspace_lock,
+					   memory_order_release);
+
+		/* Write sentinel */
+		unsigned long long *meta =
+			(unsigned long long *)((char *)base + total - 8);
+		*meta = (unsigned long long)ARENA_MULTI_PAGE_MAGIC |
+			(unsigned long long)page_cnt;
+
+		return (void __arena *)base;
+	}
+
+	/* ----------------------------------------------------------------
+	 * Small allocation path: sub-page fragment allocator (unchanged).
+	 * ---------------------------------------------------------------- */
 	while (atomic_flag_test_and_set_explicit(&bpf_arena_userspace_lock, memory_order_acquire)) {
 	}
 
@@ -325,17 +440,34 @@ static inline void __arena* bpf_arena_alloc(unsigned int size __attribute__((unu
 static inline void bpf_arena_free(void __arena *addr __attribute__((unused)))
 {
 	void *page;
-	unsigned long long *obj_cnt;
+	unsigned long long val;
+	unsigned long long *meta;
+	size_t page_sz;
 
 	if (!addr || bpf_arena_userspace_page_size == 0)
 		return;
 
-	page = (void *)((uintptr_t)addr & ~(uintptr_t)(bpf_arena_userspace_page_size - 1));
-	obj_cnt = (unsigned long long *)((char *)page +
-					bpf_arena_userspace_page_size - 8);
+	page_sz = bpf_arena_userspace_page_size;
 
-	if (*obj_cnt > 0)
-		(*obj_cnt)--;
+	/* Align down to the start of the page containing addr */
+	page = (void *)((uintptr_t)addr & ~(uintptr_t)(page_sz - 1));
+	meta = (unsigned long long *)((char *)page + page_sz - 8);
+	val  = *meta;
+
+	if ((val & (unsigned long long)ARENA_MULTI_PAGE_MASK) ==
+	    (unsigned long long)ARENA_MULTI_PAGE_MAGIC) {
+		/*
+		 * Multi-page allocation: the userspace arena is a static
+		 * mmap region so we do not need to unmap; just leave it.
+		 * In a production allocator you would track free spans and
+		 * return them to a freelist here.
+		 */
+		return;
+	}
+
+	/* Single-page fragment: decrement obj_cnt */
+	if (val > 0)
+		(*meta)--;
 }
 
 /* ========================================================================

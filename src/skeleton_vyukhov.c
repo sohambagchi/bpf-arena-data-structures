@@ -18,7 +18,7 @@
 #include "ds_metrics.h"
 #include "skeleton_vyukhov.skel.h"
 
-#define VYUKHOV_QUEUE_CAPACITY 128
+#define VYUKHOV_QUEUE_CAPACITY 512
 
 struct test_config {
 	bool verify;
