@@ -133,10 +133,11 @@ static void *relay_worker(void *arg)
 		if (!uk_initialized) {
 			if (!queue_uk->head || !queue_uk->tail) {
 				ret = ds_msqueue_init_c(queue_uk);
-				if (ret != DS_SUCCESS)
-					continue;
+				if (ret == DS_SUCCESS)
+					uk_initialized = true;
+			} else {
+				uk_initialized = true;
 			}
-			uk_initialized = true;
 		}
 
 		DS_METRICS_RECORD_OP(&skel->arena->global_metrics, DS_METRICS_USER_CONSUMER, {
@@ -146,11 +147,13 @@ static void *relay_worker(void *arg)
 			int ins_ret;
 
 			ku_dequeued_count++;
-			DS_METRICS_RECORD_OP(&skel->arena->global_metrics, DS_METRICS_USER_PRODUCER, {
-				ins_ret = ds_msqueue_insert_c(queue_uk, data.key, data.value);
-			}, ins_ret);
-			if (ins_ret == DS_SUCCESS)
-				uk_enqueued_count++;
+			if (uk_initialized) {
+				DS_METRICS_RECORD_OP(&skel->arena->global_metrics, DS_METRICS_USER_PRODUCER, {
+					ins_ret = ds_msqueue_insert_c(queue_uk, data.key, data.value);
+				}, ins_ret);
+				if (ins_ret == DS_SUCCESS)
+					uk_enqueued_count++;
+			}
 			continue;
 		}
 
@@ -323,8 +326,10 @@ int main(int argc, char **argv)
 	printf("MainThread: attached. Trigger inode_create events in another shell.\n");
 	printf("Press Ctrl+C to stop and invoke kernel consumer trigger.\n");
 
-	while (!stop_test)
-		pause();
+	while (!stop_test) {
+		usleep(1000);
+		msq_kernel_consume_trigger();
+	}
 
 	if (relay_thread_started)
 		pthread_join(relay_thread, NULL);

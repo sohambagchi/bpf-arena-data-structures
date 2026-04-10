@@ -310,8 +310,10 @@ int main(int argc, char **argv)
 	printf("MainThread: attached. Trigger inode_create events in another shell.\n");
 	printf("Press Ctrl+C to stop and invoke kernel consumer trigger.\n");
 
-	while (!stop_test)
-		pause();
+	while (!stop_test) {
+		usleep(1000);
+		ck_stack_upmc_kernel_consume_trigger();
+	}
 
 	if (relay_thread_started)
 		pthread_join(relay_thread, NULL);

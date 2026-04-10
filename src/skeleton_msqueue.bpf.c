@@ -137,7 +137,8 @@ int bpf_msq_consume(struct pt_regs *ctx)
 	total_kernel_consume_ops++;
 	if (ret == DS_SUCCESS) {
 		total_kernel_consumed++;
-		DS_METRICS_RECORD_E2E(&global_metrics, data.value);
+		if (data.value > 0)
+			DS_METRICS_RECORD_E2E(&global_metrics, data.value);
 		bpf_printk("msqueue consume key=%llu value=%llu\n", data.key, data.value);
 	} else {
 		total_kernel_consume_failures++;

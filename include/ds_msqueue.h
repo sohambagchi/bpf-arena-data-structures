@@ -15,6 +15,8 @@
 
 #include "ds_api.h"
 
+#define DS_MSQUEUE_MAX_RETRIES 100
+
 /* ========================================================================
  * DATA STRUCTURES
  * ======================================================================== */
@@ -167,7 +169,7 @@ static inline int __msqueue_add_node_lkmm(struct ds_msqueue_elem __arena *new_no
 					  struct ds_msqueue __arena *queue) {
 	struct ds_msqueue_elem __arena *tail;
 	struct ds_msqueue_node __arena *next;
-	int max_retries = 10;
+	int max_retries = DS_MSQUEUE_MAX_RETRIES;
 	int retry_count = 0;
 
 	/* Enqueue loop */
@@ -225,7 +227,7 @@ static inline int __msqueue_add_node_c(struct ds_msqueue_elem __arena *new_node,
 				       struct ds_msqueue __arena *queue) {
 	struct ds_msqueue_elem __arena *tail;
 	struct ds_msqueue_node __arena *next;
-	int max_retries = 10;
+	int max_retries = DS_MSQUEUE_MAX_RETRIES;
 	int retry_count = 0;
 
 	while (retry_count < max_retries && can_loop) {
@@ -369,7 +371,7 @@ static inline int ds_msqueue_pop_lkmm(struct ds_msqueue __arena *queue, struct d
 	struct ds_msqueue_elem __arena *tail;
 	ds_msqueue_node_t *next;
 	// ds_msqueue_node_t *next_tail;
-	int max_retries = 10;
+	int max_retries = DS_MSQUEUE_MAX_RETRIES;
 	int retry_count = 0;
 	
 	if (!queue || !data) {
@@ -440,7 +442,7 @@ static inline int ds_msqueue_pop_c(struct ds_msqueue __arena *queue, struct ds_k
 	struct ds_msqueue_elem __arena *head;
 	struct ds_msqueue_elem __arena *tail;
 	ds_msqueue_node_t *next;
-	int max_retries = 10;
+	int max_retries = DS_MSQUEUE_MAX_RETRIES;
 	int retry_count = 0;
 
 	/* Guard userspace caller mistakes that can surface as runner SIGSEGV (-11). */
