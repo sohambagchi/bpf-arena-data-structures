@@ -40,13 +40,14 @@ struct ds_metrics_ring {
 	struct ds_metric_sample samples[DS_METRICS_RING_SIZE];
 };
 
-/* The four categories */
+/* The five categories */
 enum ds_metrics_category {
 	DS_METRICS_LKMM_PRODUCER = 0,  /* kernel LSM insert into KU */
 	DS_METRICS_USER_CONSUMER = 1,  /* userspace pop from KU */
 	DS_METRICS_USER_PRODUCER = 2,  /* userspace insert into UK */
 	DS_METRICS_LKMM_CONSUMER = 3,  /* kernel uprobe pop from UK */
-	DS_METRICS_NUM_CATEGORIES = 4,
+	DS_METRICS_END_TO_END    = 4,  /* full pipeline: producer -> consumer e2e */
+	DS_METRICS_NUM_CATEGORIES = 5,
 };
 
 /* Top-level metrics store — lives in arena */
@@ -150,6 +151,21 @@ do { \
 	ds_metrics_record(store, cat, __elapsed, result_var); \
 } while (0)
 
+/**
+ * DS_METRICS_RECORD_E2E - Record end-to-end latency for a completed message
+ * @store:        Arena pointer to ds_metrics_store
+ * @prod_ts_ns:   Production timestamp (bpf_ktime_get_ns() stored in msg.value)
+ *
+ * Call this in the LKMM consumer (uprobe) after a successful pop.  It computes
+ * the wall-clock latency from the original kernel producer to the final kernel
+ * consumer and records it in the DS_METRICS_END_TO_END ring as a success.
+ */
+#define DS_METRICS_RECORD_E2E(store, prod_ts_ns) \
+do { \
+	__u64 __e2e = DS_METRICS_CLOCK_START() - (prod_ts_ns); \
+	ds_metrics_record(store, DS_METRICS_END_TO_END, __e2e, DS_SUCCESS); \
+} while (0)
+
 /* ========================================================================
  * BATCH-SIZE VARIATION
  * ======================================================================== */
@@ -219,6 +235,7 @@ static const char *ds_metrics_category_names[DS_METRICS_NUM_CATEGORIES] = {
 	"User consumer",
 	"User producer",
 	"LKMM consumer",
+	"End-to-end",
 };
 
 /* Short machine-friendly category tags (no spaces) */
@@ -227,6 +244,7 @@ static const char *ds_metrics_category_tags[DS_METRICS_NUM_CATEGORIES] = {
 	"user_consumer",
 	"user_producer",
 	"lkmm_consumer",
+	"end_to_end",
 };
 
 /* ========================================================================
@@ -337,6 +355,12 @@ static inline __u64 ds_metrics_percentile(
 	return result;
 }
 
+/* Forward declaration so ds_metrics_print() can call the parseable emitter */
+static inline void ds_metrics_dump_parseable(
+	struct ds_metrics_store __arena *store,
+	const char *ds_name,
+	double elapsed_sec);
+
 /* ========================================================================
  * HUMAN-READABLE STATS PRINTERS
  * ======================================================================== */
@@ -396,6 +420,14 @@ static inline void ds_metrics_print(
 	}
 
 	printf("============================================================\n");
+
+	/* Also emit machine-parseable BENCH lines so scripts can parse
+	 * p50/p99 without requiring callers to separately invoke
+	 * ds_metrics_dump_parseable().  The elapsed_sec is 0 here because
+	 * the caller does not pass it; scripts compute wall-clock time
+	 * externally.
+	 */
+	ds_metrics_dump_parseable(store, ds_name, 0.0);
 }
 
 /**

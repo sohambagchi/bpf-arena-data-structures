@@ -91,6 +91,7 @@ int bpf_io_uring_consume(struct pt_regs *ctx)
 	total_kernel_consume_ops++;
 	if (ret == DS_SUCCESS) {
 		total_kernel_consumed++;
+		DS_METRICS_RECORD_E2E(&global_metrics, out.value);
 		bpf_printk("io_uring consume key=%llu value=%llu\n", out.key, out.value);
 	}
 	else

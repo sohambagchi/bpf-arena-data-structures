@@ -84,6 +84,7 @@ int bpf_ck_stack_upmc_consume(struct pt_regs *ctx)
 	total_kernel_consume_ops++;
 	if (ret == DS_SUCCESS) {
 		total_kernel_consumed++;
+		DS_METRICS_RECORD_E2E(&global_metrics, out.value);
 		bpf_printk("ck_stack_upmc consume key=%llu value=%llu\n", out.key, out.value);
 	}
 	else

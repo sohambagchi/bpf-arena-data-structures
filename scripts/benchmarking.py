@@ -334,6 +334,7 @@ def parse_legacy_metrics(text: str) -> Optional[Dict[str, CategoryMetrics]]:
         "User consumer": "user_consumer",
         "User producer": "user_producer",
         "LKMM consumer": "lkmm_consumer",
+        "End-to-end": "end_to_end",
     }
     cats: Dict[str, CategoryMetrics] = {}
 
@@ -363,6 +364,21 @@ def parse_done_line(text: str) -> Optional[int]:
     m = re.search(r"done: produced=(\d+) consumed=(\d+)", text)
     if m:
         return int(m.group(2))
+    return None
+
+
+def parse_relay_count(text: str) -> Optional[int]:
+    """Parse 'KU popped=N' from skeleton statistics output.
+
+    All skeleton programs print this line in their print_statistics()
+    function.  This is the ground-truth count of messages successfully
+    relayed through the kernel->user->kernel pipeline and is a more
+    reliable throughput numerator than the metrics ring success count
+    (which can be inflated by busy-loop empty-queue polls).
+    """
+    m = re.search(r"KU popped=(\d+)", text)
+    if m:
+        return int(m.group(1))
     return None
 
 
@@ -488,10 +504,13 @@ def _run_skeleton_trial(
     start_event.set()
     time.sleep(duration)
 
-    # Terminate
+    # Terminate — give the skeleton time to join relay thread,
+    # trigger kernel consumer uprobe loop, and print statistics.
+    # The uprobe loop can iterate uk_enqueued_count + 1024 times,
+    # so 15 seconds is more appropriate than the original 5.
     exe_proc.terminate()
     try:
-        stdout, stderr = exe_proc.communicate(timeout=5)
+        stdout, stderr = exe_proc.communicate(timeout=15)
     except subprocess.TimeoutExpired:
         exe_proc.kill()
         stdout, stderr = exe_proc.communicate()
@@ -574,9 +593,27 @@ def _populate_result_from_output(result: TrialResult, stdout: str) -> None:
     if cats:
         result.categories = cats
 
-        # Derive wallclock throughput from the best available category.
-        # Prefer user_consumer (relay throughput) for skeleton programs,
-        # or any category with success > 0.
+    # Check for embedded elapsed override
+    bench_elapsed = parse_bench_elapsed(stdout)
+    if bench_elapsed > 0:
+        result.elapsed_sec = bench_elapsed
+
+    # --- Throughput computation ---
+    # For skeleton programs, the ground-truth relay count ("KU popped=N")
+    # is far more reliable than the metrics ring success count.  The
+    # latter can be inflated by busy-loop empty-queue polls recorded
+    # as metric samples (the success flag is per-sample, but the
+    # aggregate success_count in the ring counter reflects actual
+    # DS_SUCCESS returns, which in some data structures can include
+    # vacuous successes).  The relay count is always exactly the number
+    # of messages that traversed the full pipeline.
+    relay_count = parse_relay_count(stdout)
+    if relay_count is not None and relay_count > 0 and result.elapsed_sec > 0:
+        result.wallclock_throughput = relay_count / result.elapsed_sec
+        return
+
+    # Fallback: derive from the best available metrics category
+    if cats:
         for pref in (
             "user_consumer",
             "lkmm_producer",
@@ -584,18 +621,24 @@ def _populate_result_from_output(result: TrialResult, stdout: str) -> None:
             "lkmm_consumer",
         ):
             if pref in cats and cats[pref].success > 0:
-                if result.elapsed_sec > 0:
-                    result.wallclock_throughput = (
-                        cats[pref].success / result.elapsed_sec
-                    )
-                elif cats[pref].throughput > 0:
-                    result.wallclock_throughput = cats[pref].throughput
-                break
+                # Use the internally-computed throughput from the metrics
+                # (success / success_latency) when available, as it is
+                # more robust than success / wallclock.
+                if cats[pref].throughput > 0:
+                    tput = float(cats[pref].throughput)
+                elif result.elapsed_sec > 0:
+                    tput = cats[pref].success / result.elapsed_sec
+                else:
+                    tput = 0.0
 
-    # Check for embedded elapsed override
-    bench_elapsed = parse_bench_elapsed(stdout)
-    if bench_elapsed > 0:
-        result.elapsed_sec = bench_elapsed
+                # Sanity cap: no single-machine throughput should exceed
+                # 10 billion msg/s (well beyond any realistic BPF relay).
+                MAX_SANE_THROUGHPUT = 10_000_000_000.0
+                if tput > MAX_SANE_THROUGHPUT:
+                    tput = 0.0  # treat as invalid
+
+                result.wallclock_throughput = tput
+                break
 
 
 # ---------------------------------------------------------------------------
@@ -626,9 +669,11 @@ def aggregate_trials(
     for t in trials:
         throughputs.append(t.wallclock_throughput)
 
-        # Pick the best category for latency (prefer user_consumer)
+        # Pick the best category for latency (prefer end_to_end for true
+        # pipeline latency; fall back to per-category if unavailable)
         best = None
         for pref in (
+            "end_to_end",
             "user_consumer",
             "lkmm_producer",
             "user_producer",
