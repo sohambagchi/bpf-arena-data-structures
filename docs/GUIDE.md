@@ -21,6 +21,7 @@ All relay apps use the same control shape (`-v`, `-s`, `-h`) and print lane stat
 - `skeleton_ck_ring_spsc` -> `include/ds_ck_ring_spsc.h`
 - `skeleton_ck_stack_upmc` -> `include/ds_ck_stack_upmc.h`
 - `skeleton_io_uring` -> `include/ds_io_uring.h`
+- `skeleton_iouring_liburing` -> `include/ds_iouring_liburing.h`
 - `skeleton_kcov` -> `include/ds_kcov.h`
 
 ## Implemented Data Structures
@@ -28,6 +29,7 @@ All relay apps use the same control shape (`-v`, `-s`, `-h`) and print lane stat
 | **Name** | **Header** | **Relay app** | **Notes** |
 |---|---|---|---|
 | **io_uring Ring** | `ds_io_uring.h` | `skeleton_io_uring` | BPF arena port of io_uring's SPSC ring memory model. Power-of-2 mask indexing, u32 natural wrap, store-release/load-acquire barrier pairs, and `sq_flags` atomic field (arena_atomic_or/and). No SQ indirection array. |
+| **io_uring/liburing Ring** | `ds_iouring_liburing.h` | `skeleton_iouring_liburing` | Faithful port of io_uring/liburing's four SQPOLL roles with asymmetric memory ordering. CQ produce uses READ_ONCE + control dependency (LKMM) vs ACQUIRE (C11); CQ consume uses double-acquire; SQ consume uses READ_ONCE on entry fields (untrusted); SQ produce uses plain stores. |
 | **kcov Buffer** | `ds_kcov.h` | `skeleton_kcov` | Faithful BPF arena port of Linux kcov's flat append array. area[0] = entry count, counter-first write ordering for interrupt re-entrancy safety, compiler barrier only (no hardware fences). Silent overflow drop. |
 
 Source pairs live in `src/` as `skeleton_*.bpf.c` and `skeleton_*.c`.

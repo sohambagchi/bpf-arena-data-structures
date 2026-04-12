@@ -38,8 +38,10 @@ moment it is produced (Stage 1) to the moment it is finally consumed
 
 The `touch` command triggers `inode_create` LSM hooks, which drive Stage 1.
 The userspace relay thread continuously pops from the KU queue and pushes
-to the UK queue (Stages 2-3).  On shutdown, the uprobe consumer loop
-drains the UK queue (Stage 4).
+to the UK queue (Stages 2-3).  The main thread periodically invokes the
+uprobe consumer trigger (~1 kHz via `usleep(1000)`) to drain the UK queue
+during the test (Stage 4).  On shutdown, a final drain loop ensures all
+remaining UK messages are consumed before metrics are printed.
 
 ## Metrics infrastructure
 
@@ -145,13 +147,16 @@ The end-to-end latency measurement piggybacks on the existing
    unchanged.  No modification occurs.
 
 3. **Stage 4 (LKMM Consumer)**: After a successful pop, the uprobe
-   computes the end-to-end latency and records it:
+   computes the end-to-end latency and records it.  A zero-timestamp
+   guard skips recording for messages with `value == 0` (e.g., sentinel
+   or dummy nodes from data structure initialization):
 
    ```c
    /* In every skeleton_*.bpf.c consumer (SEC("uprobe.s")) */
    ret = ds_xyz_pop_lkmm(queue, &data);
    if (ret == DS_SUCCESS) {
-       DS_METRICS_RECORD_E2E(&global_metrics, data.value);
+       if (data.value > 0)
+           DS_METRICS_RECORD_E2E(&global_metrics, data.value);
        /* data.value = original bpf_ktime_get_ns() from producer */
        /* macro computes: bpf_ktime_get_ns() - data.value        */
    }
@@ -174,6 +179,11 @@ ds_metrics_record(store, DS_METRICS_END_TO_END, e2e, DS_SUCCESS);
   `DS_SUCCESS` in the consumer.  Messages that fail to enqueue, get
   dropped due to capacity limits, or never reach the consumer do not
   contribute any end-to-end sample.
+
+- **Zero-timestamp guard**: Messages with `value == 0` (e.g., sentinel
+  or dummy nodes from CK stack/FIFO initialization) are excluded from
+  end-to-end recording.  Without this guard, consuming a zero-timestamp
+  message would produce a latency equal to the machine uptime.
 
 - **No relay modification**: Every data structure stores and retrieves
   the `value` field as an opaque `__u64`.  The relay thread passes it
@@ -491,6 +501,43 @@ back in reverse insertion order.  This does not affect end-to-end
 latency correctness (each message still carries its own production
 timestamp), but it means that under bursty workloads the most recently
 produced message is consumed first.
+
+### Periodic consumer trigger
+
+During the test, the main thread calls the uprobe consumer trigger
+every ~1 ms (`usleep(1000)` + trigger function call).  This drains
+the UK queue continuously rather than accumulating messages until
+shutdown.  Without periodic triggering, all UK messages would be
+consumed in a burst after `SIGTERM`, giving end-to-end latencies
+approximately equal to the test duration (since production timestamps
+span 0 to T and all consumption happens at T).  With periodic
+triggering, messages are consumed shortly after they arrive in the
+UK queue, yielding actual pipeline transit latencies.
+
+The trigger function is a `noinline` no-op (`asm volatile("" ::: "memory")`)
+that serves as a uprobe attachment point.  Each skeleton has its own
+trigger function (e.g., `msq_kernel_consume_trigger()`,
+`vyukhov_kernel_consume_trigger()`).  The uprobe fires in the context
+of the main thread, not the relay thread, so SPSC queue semantics
+are preserved.
+
+### Zero-timestamp guard
+
+Messages with `value == 0` are excluded from end-to-end latency
+recording.  This handles sentinel/dummy nodes from data structure
+initialization (e.g., CK stack UPMC initializes nodes with all-zero
+fields).  Without this guard, consuming such a node would compute
+`bpf_ktime_get_ns() - 0 = machine_uptime_ns`, producing absurdly
+large latency values (e.g., 11 days for a machine with 11 days uptime).
+
+### MSQueue retry limit
+
+The MSQueue (Michael-Scott queue) uses CAS-based lock-free operations
+with a `DS_MSQUEUE_MAX_RETRIES` limit (100).  Under contention from
+the periodic consumer trigger competing on the UK queue, CAS failures
+can occur.  The retry limit prevents infinite loops in BPF context
+(required by the verifier) but means operations can silently fail
+after exhausting retries.
 
 ## File reference
 

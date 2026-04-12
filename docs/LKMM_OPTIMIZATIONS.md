@@ -1,8 +1,8 @@
 # LKMM Optimizations Reference
 
-**Data structures:** Michael-Scott Queue · Vyukov MPMC Queue · Folly SPSC Queue · CK FIFO SPSC · CK Ring SPSC · CK Stack UPMC  
-**Files:** `include/ds_msqueue.h`, `include/ds_vyukhov.h`, `include/ds_folly_spsc.h`, `include/ds_ck_fifo_spsc.h`, `include/ds_ck_ring_spsc.h`, `include/ds_ck_stack_upmc.h`  
-**Last updated:** 2026-03-19
+**Data structures:** Michael-Scott Queue · Vyukov MPMC Queue · Folly SPSC Queue · CK FIFO SPSC · CK Ring SPSC · CK Stack UPMC · io_uring/liburing SPSC Ring  
+**Files:** `include/ds_msqueue.h`, `include/ds_vyukhov.h`, `include/ds_folly_spsc.h`, `include/ds_ck_fifo_spsc.h`, `include/ds_ck_ring_spsc.h`, `include/ds_ck_stack_upmc.h`, `include/ds_iouring_liburing.h`  
+**Last updated:** 2026-04-12
 
 ---
 
@@ -331,7 +331,81 @@ Floyd's cycle detection using `slow` and `fast` pointers. All pointer loads — 
 
 ---
 
-## 9. Summary of Changes Made
+## 9. io_uring/liburing SPSC Ring (`ds_iouring_liburing.h`)
+
+### 9.1 Algorithm Sketch
+
+The io_uring/liburing SPSC ring is a faithful port of the four SQPOLL producer/consumer roles from Linux io_uring (kernel) and liburing (userspace). Unlike the symmetric `ds_io_uring.h` which uses identical memory ordering for both lanes, this implementation preserves every memory ordering asymmetry from the original io_uring and liburing source code.
+
+The ring uses two instances of the same struct — one for the SQ ring (UK lane: user produces, kernel consumes) and one for the CQ ring (KU lane: kernel produces, user consumes). Each ring has a producer tail index (sole writer: producer) and a consumer head index (sole writer: consumer), separated on different cache lines. Power-of-2 entries with mask-based indexing; u32 natural 2^32 wrap-around.
+
+The four roles exhibit different memory ordering patterns, with the key asymmetries being:
+- **SQ produce** (user): plain stores for entry fields (liburing `io_uring_prep_*` pattern)
+- **SQ consume** (kernel): `READ_ONCE` on entry fields (kernel doesn't trust userspace memory)
+- **CQ produce** (kernel): `WRITE_ONCE` for entry fields (kernel `io_fill_cqe_aux` pattern), and `READ_ONCE` + control dependency on `cons.head` instead of acquire
+- **CQ consume** (user): plain reads of entry fields (userspace trusts kernel memory), with a double-acquire pattern on both `prod.tail` and `cons.head`
+
+### 9.2 Function-by-Function Analysis
+
+#### `ds_iouring_liburing_init_lkmm`
+
+All writes target a freshly-allocated ring structure during single-threaded initialisation. `WRITE_ONCE(head->prod.tail, 0)`, `WRITE_ONCE(head->cons.head, 0)`, and `WRITE_ONCE(head->sq_flags, 0)` prevent compiler tearing. Plain stores to `head->ring_entries` and `head->ring_mask` are safe because no concurrent thread observes the structure until after the caller publishes it. `cast_user(entries)` before `head->entries = entries` ensures the pointer is stored in user-space form.
+
+#### `ds_iouring_liburing_sq_produce_lkmm` (SQ produce — user side)
+
+Reference: liburing `_io_uring_get_sqe` + `io_uring_prep_*` + `__io_uring_flush_sq`.
+
+`READ_ONCE(head->prod.tail)` loads the producer-private tail index. No other thread writes `prod.tail` in SPSC; `READ_ONCE` prevents compiler caching.
+
+`smp_load_acquire(&head->cons.head)` pairs with the kernel consumer's `smp_store_release` of `cons.head` in `io_commit_sqring`. The acquire ensures that if the kernel has advanced `cons.head` past a slot, the kernel is truly done reading that entry and the slot is safe to overwrite. Reference: liburing `io_uring_load_sq_head` (line 1693).
+
+Plain stores `slot->key = key` and `slot->value = value` write entry data. These are plain stores matching the liburing `io_uring_prep_*` pattern, where SQE fields are filled with plain writes to mmap'd memory. The stores are ordered before the tail update by the release store below.
+
+`smp_store_release(&head->prod.tail, tail + 1)` publishes the new entry. The release fence ensures all entry data stores are visible to any thread that does an acquire load on `prod.tail`. Reference: `__io_uring_flush_sq` (queue.c:228).
+
+#### `ds_iouring_liburing_sq_consume_lkmm` (SQ consume — kernel side)
+
+Reference: `io_sqring_entries` + `io_get_sqe` + `io_init_req` + `io_commit_sqring`.
+
+`READ_ONCE(head->cons.head)` loads the consumer-private head index. Single writer in SPSC; `READ_ONCE` for compiler discipline.
+
+`smp_load_acquire(&head->prod.tail)` pairs with the user's `smp_store_release` of `prod.tail`. The acquire ensures all SQE data written by userspace before the tail update is visible. Reference: `io_sqring_entries` (io_uring.h:455).
+
+`READ_ONCE(slot->key)` and `READ_ONCE(slot->value)` — volatile loads for entry fields. The kernel uses `READ_ONCE` on all SQE fields (opcode, flags, user_data, fd, etc.) because it does not trust userspace memory. `READ_ONCE` prevents the compiler from re-reading a value that userspace could change between reads. As the io_uring source comments: "care needs to be taken to ensure that reads are stable, as we cannot rely on userspace always being a good citizen" (io_uring.c:2383-2389). This is the key asymmetry with CQ consume, which uses plain reads because userspace trusts kernel memory.
+
+`smp_store_release(&head->cons.head, h + 1)` frees the slot for the producer. "Ensure any loads from the SQEs are done at this point, since once we write the new head, the application could write new data to them" (io_uring.c:2375-2378). Reference: `io_commit_sqring` (io_uring.c:2380).
+
+#### `ds_iouring_liburing_cq_produce_lkmm` (CQ produce — kernel side)
+
+Reference: `__io_cqring_events` + `io_fill_cqe_aux` + `io_commit_cqring`.
+
+`READ_ONCE(head->prod.tail)` loads the producer-private tail index.
+
+`READ_ONCE(head->cons.head)` — **NOT** `smp_load_acquire`. **This is the signature LKMM optimisation** in this data structure. The io_uring source comment at lines 762-766 explains: "writes to the cq entry need to come after reading head; the control dependency is enough as we're using WRITE_ONCE to fill the cq entry." The branch `if (tail - h >= head->ring_entries)` creates a control dependency from the `READ_ONCE` of `cons.head` to the `WRITE_ONCE` stores in the success path. Under LKMM, a conditional branch that uses a `READ_ONCE` value orders all stores inside the taken branch after the load. The compiler cannot hoist a `WRITE_ONCE` (volatile store) above the branch because doing so would change the observable behaviour of the conditional. On hardware, the stores are speculated but not committed until the branch resolves, which is sufficient for control-dependency ordering. The `_c` variant (`ds_iouring_liburing_cq_produce_c`) must upgrade this to `ARENA_ACQUIRE` because C11 does not recognise control dependencies as a first-class ordering mechanism — a C11 compiler is free to speculatively evaluate both sides of a branch and commit stores from the "wrong" side.
+
+`WRITE_ONCE(slot->key, key)` and `WRITE_ONCE(slot->value, value)` — volatile stores for entry fields. The kernel's `io_fill_cqe_aux` uses `WRITE_ONCE` for CQE fields (user_data, res, flags) at io_uring.c:831-833. `WRITE_ONCE` (rather than plain store) is essential for the control dependency to provide ordering: LKMM's control dependency orders `READ_ONCE` → branch → `WRITE_ONCE` but does **not** order `READ_ONCE` → branch → plain store, because the compiler may hoist a plain store above the branch. This is the key asymmetry with SQ produce, which uses plain stores because those are ordered by the release fence rather than a control dependency.
+
+`smp_store_release(&head->prod.tail, tail + 1)` publishes the completions. "order cqe stores with ring update" (io_uring.h:402). Reference: `io_commit_cqring` (io_uring.h:403).
+
+#### `ds_iouring_liburing_cq_consume_lkmm` (CQ consume — user side)
+
+Reference: `__io_uring_peek_cqe` + `io_uring_cq_advance`.
+
+`smp_load_acquire(&head->prod.tail)` pairs with the kernel's `smp_store_release` of `prod.tail` in `io_commit_cqring`. The acquire ensures all CQE data written by the kernel before the tail update is visible. Reference: `__io_uring_peek_cqe` (liburing.h:1858).
+
+`smp_load_acquire(&head->cons.head)` — the **double-acquire** pattern. Even though the user is the sole writer of `cons.head`, acquire semantics are used. The liburing comment at lines 1860-1862 explains: "A load_acquire on the head prevents reordering with the cqe load below, ensuring that we see the correct cq entry." This matters when `__io_uring_peek_cqe` loops (skipping CQEs): `io_uring_cq_advance` (release store on head) may have been called in the loop body, and the acquire on head prevents a subsequent iteration's CQE load from being reordered before the release. In our single-pop implementation the acquire is technically unnecessary, but we preserve it for faithfulness to the original liburing pattern.
+
+Plain reads `slot->key` and `slot->value` — trusted kernel memory. Unlike SQ consume where the kernel uses `READ_ONCE` on untrusted userspace memory, the user reads CQE fields with plain loads because the kernel is a trusted writer. The reads are ordered after the `prod.tail` acquire by program order + acquire semantics.
+
+`smp_store_release(&head->cons.head, h + 1)` — "Ensure that the kernel only sees the new value of the head index after the CQEs have been read" (liburing.h:487-489). Pairs with the kernel's `READ_ONCE(cons.head)` + control dependency in `cq_produce_lkmm`.
+
+#### `ds_iouring_liburing_verify_lkmm`
+
+`READ_ONCE(head->prod.tail)` and `READ_ONCE(head->cons.head)` snapshot both indices for structural integrity checks. Relaxed loads suffice because verify runs during a quiescent period. The function checks that `ring_entries` is a non-zero power of 2, that `ring_mask == ring_entries - 1`, and that the occupancy `(tail - head)` does not exceed `ring_entries`.
+
+---
+
+## 10. Summary of Changes Made
 
 | File | Function | Change | Justification |
 |---|---|---|---|
@@ -342,7 +416,7 @@ All other `_lkmm` functions across the five remaining data structures were alrea
 
 ---
 
-## 10. Key Patterns Reference
+## 11. Key Patterns Reference
 
 ### 10.1 Release-Acquire Pair (Cross-Thread Publication)
 
