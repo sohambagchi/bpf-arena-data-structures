@@ -159,6 +159,13 @@ do { \
  * Call this in the LKMM consumer (uprobe) after a successful pop.  It computes
  * the wall-clock latency from the original kernel producer to the final kernel
  * consumer and records it in the DS_METRICS_END_TO_END ring as a success.
+ *
+ * NOTE: The print functions (ds_metrics_print, ds_metrics_print_extended,
+ * ds_metrics_dump_parseable) do NOT use the wall-clock E2E from this ring.
+ * Instead they compute E2E as the sum of the four per-operation Avg-OK(ns)
+ * values (categories 0-3), which reflects the operational cost without
+ * queue-wait time from the usleep polling interval.  The raw wall-clock
+ * samples remain in the ring for debugging purposes.
  */
 #define DS_METRICS_RECORD_E2E(store, prod_ts_ns) \
 do { \
@@ -389,6 +396,10 @@ static inline void ds_metrics_print(
 	       "Category", "Total", "Success", "Rate%",
 	       "Avg(ns)", "Avg-OK(ns)", "Tput-OK");
 
+	/* Accumulate per-operation Avg-OK(ns) for categories 0-3 to
+	 * compute E2E as their sum (operational cost, no queue wait). */
+	__u64 sum_avg_ok = 0;
+
 	for (int i = 0; i < DS_METRICS_NUM_CATEGORIES; i++) {
 		struct ds_metrics_ring __arena *ring = &store->rings[i];
 		cast_kern(ring);
@@ -409,14 +420,38 @@ static inline void ds_metrics_print(
 		if (lat_ok > 0)
 			throughput = (__u64)((double)success / ((double)lat_ok / 1e9));
 
-		printf("%-20s %7llu %9llu %5.1f%% %9llu %11llu %11llu\n",
-		       ds_metrics_category_names[i],
-		       (unsigned long long)total,
-		       (unsigned long long)success,
-		       rate,
-		       (unsigned long long)avg_all,
-		       (unsigned long long)avg_ok,
-		       (unsigned long long)throughput);
+		if (i < DS_METRICS_END_TO_END) {
+			/* Categories 0-3: print from ring data */
+			sum_avg_ok += avg_ok;
+			printf("%-20s %7llu %9llu %5.1f%% %9llu %11llu %11llu\n",
+			       ds_metrics_category_names[i],
+			       (unsigned long long)total,
+			       (unsigned long long)success,
+			       rate,
+			       (unsigned long long)avg_all,
+			       (unsigned long long)avg_ok,
+			       (unsigned long long)throughput);
+		} else {
+			/* E2E: compute as sum of four per-op Avg-OK values.
+			 * Use LKMM consumer success count as the pipeline
+			 * completion count; throughput derived from that. */
+			struct ds_metrics_ring __arena *cons_ring =
+				&store->rings[DS_METRICS_LKMM_CONSUMER];
+			cast_kern(cons_ring);
+			__u64 e2e_count = cons_ring->success_count;
+			__u64 e2e_tput = 0;
+			if (sum_avg_ok > 0 && e2e_count > 0)
+				e2e_tput = (__u64)(1e9 / (double)sum_avg_ok);
+
+			printf("%-20s %7llu %9llu %5.1f%% %9llu %11llu %11llu\n",
+			       ds_metrics_category_names[i],
+			       (unsigned long long)e2e_count,
+			       (unsigned long long)e2e_count,
+			       (e2e_count > 0) ? 100.0 : 0.0,
+			       (unsigned long long)sum_avg_ok,
+			       (unsigned long long)sum_avg_ok,
+			       (unsigned long long)e2e_tput);
+		}
 	}
 
 	printf("============================================================\n");
@@ -456,6 +491,10 @@ static inline void ds_metrics_print_extended(
 	       "Category", "Total", "Success", "Rate%",
 	       "Avg(ns)", "p50(ns)", "p99(ns)", "Tput-OK");
 
+	/* Accumulate per-operation Avg-OK(ns) for categories 0-3 to
+	 * compute E2E as their sum (operational cost, no queue wait). */
+	__u64 sum_avg_ok = 0;
+
 	for (int i = 0; i < DS_METRICS_NUM_CATEGORIES; i++) {
 		struct ds_metrics_ring __arena *ring = &store->rings[i];
 		cast_kern(ring);
@@ -477,15 +516,39 @@ static inline void ds_metrics_print_extended(
 			throughput = (__u64)((double)success
 					    / ((double)lat_ok / 1e9));
 
-		printf("%-18s %7llu %9llu %5.1f%% %9llu %9llu %9llu %11llu\n",
-		       ds_metrics_category_names[i],
-		       (unsigned long long)total,
-		       (unsigned long long)success,
-		       rate,
-		       (unsigned long long)avg_ok,
-		       (unsigned long long)p50,
-		       (unsigned long long)p99,
-		       (unsigned long long)throughput);
+		if (i < DS_METRICS_END_TO_END) {
+			/* Categories 0-3: print from ring data */
+			sum_avg_ok += avg_ok;
+			printf("%-18s %7llu %9llu %5.1f%% %9llu %9llu %9llu %11llu\n",
+			       ds_metrics_category_names[i],
+			       (unsigned long long)total,
+			       (unsigned long long)success,
+			       rate,
+			       (unsigned long long)avg_ok,
+			       (unsigned long long)p50,
+			       (unsigned long long)p99,
+			       (unsigned long long)throughput);
+		} else {
+			/* E2E: compute as sum of four per-op Avg-OK values.
+			 * p50/p99 set to 0 since this is a derived metric. */
+			struct ds_metrics_ring __arena *cons_ring =
+				&store->rings[DS_METRICS_LKMM_CONSUMER];
+			cast_kern(cons_ring);
+			__u64 e2e_count = cons_ring->success_count;
+			__u64 e2e_tput = 0;
+			if (sum_avg_ok > 0 && e2e_count > 0)
+				e2e_tput = (__u64)(1e9 / (double)sum_avg_ok);
+
+			printf("%-18s %7llu %9llu %5.1f%% %9llu %9llu %9llu %11llu\n",
+			       ds_metrics_category_names[i],
+			       (unsigned long long)e2e_count,
+			       (unsigned long long)e2e_count,
+			       (e2e_count > 0) ? 100.0 : 0.0,
+			       (unsigned long long)sum_avg_ok,
+			       (unsigned long long)0,
+			       (unsigned long long)0,
+			       (unsigned long long)e2e_tput);
+		}
 	}
 
 	printf("============================================================"
@@ -525,6 +588,10 @@ static inline void ds_metrics_dump_parseable(
 
 	printf("BENCH_METRICS_BEGIN %s\n", ds_name);
 
+	/* Accumulate per-operation Avg-OK(ns) for categories 0-3 to
+	 * compute E2E as their sum (operational cost, no queue wait). */
+	__u64 sum_avg_ok = 0;
+
 	for (int i = 0; i < DS_METRICS_NUM_CATEGORIES; i++) {
 		struct ds_metrics_ring __arena *ring = &store->rings[i];
 		cast_kern(ring);
@@ -542,15 +609,39 @@ static inline void ds_metrics_dump_parseable(
 			throughput = (__u64)((double)success
 					    / ((double)lat_ok / 1e9));
 
-		printf("BENCH %s total=%llu success=%llu avg_ns=%llu "
-		       "p50_ns=%llu p99_ns=%llu tput=%llu\n",
-		       ds_metrics_category_tags[i],
-		       (unsigned long long)total,
-		       (unsigned long long)success,
-		       (unsigned long long)avg_ok,
-		       (unsigned long long)p50,
-		       (unsigned long long)p99,
-		       (unsigned long long)throughput);
+		if (i < DS_METRICS_END_TO_END) {
+			/* Categories 0-3: emit from ring data */
+			sum_avg_ok += avg_ok;
+			printf("BENCH %s total=%llu success=%llu avg_ns=%llu "
+			       "p50_ns=%llu p99_ns=%llu tput=%llu\n",
+			       ds_metrics_category_tags[i],
+			       (unsigned long long)total,
+			       (unsigned long long)success,
+			       (unsigned long long)avg_ok,
+			       (unsigned long long)p50,
+			       (unsigned long long)p99,
+			       (unsigned long long)throughput);
+		} else {
+			/* E2E: compute as sum of four per-op Avg-OK values.
+			 * p50/p99 set to 0 since this is a derived metric. */
+			struct ds_metrics_ring __arena *cons_ring =
+				&store->rings[DS_METRICS_LKMM_CONSUMER];
+			cast_kern(cons_ring);
+			__u64 e2e_count = cons_ring->success_count;
+			__u64 e2e_tput = 0;
+			if (sum_avg_ok > 0 && e2e_count > 0)
+				e2e_tput = (__u64)(1e9 / (double)sum_avg_ok);
+
+			printf("BENCH %s total=%llu success=%llu avg_ns=%llu "
+			       "p50_ns=%llu p99_ns=%llu tput=%llu\n",
+			       ds_metrics_category_tags[i],
+			       (unsigned long long)e2e_count,
+			       (unsigned long long)e2e_count,
+			       (unsigned long long)sum_avg_ok,
+			       (unsigned long long)0,
+			       (unsigned long long)0,
+			       (unsigned long long)e2e_tput);
+		}
 	}
 
 	if (elapsed_sec > 0.0)
