@@ -18,6 +18,7 @@ import csv
 import threading
 import re
 import statistics
+import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -428,6 +429,42 @@ def write_final_csv(
 # ---------------------------------------------------------------------------
 
 
+def generate_cdf_from_csv(csv_path: str, png_path: Optional[str] = None) -> None:
+    """Read a --final CSV and generate a CDF graph from it.
+
+    If *png_path* is None, derives it from *csv_path* by replacing the
+    extension with ``_cdf.png``.
+    """
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+    except ImportError:
+        print("Error: matplotlib/numpy not available, cannot generate graph.")
+        return
+
+    if png_path is None:
+        base, _ = os.path.splitext(csv_path)
+        png_path = f"{base}_cdf.png"
+
+    # Read CSV into {ds_name: [e2e_ns, ...]}
+    ds_e2e: Dict[str, List[int]] = {}
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            ds = row["DS"]
+            e2e = int(row["E2E (ns)"])
+            ds_e2e.setdefault(ds, []).append(e2e)
+
+    if not ds_e2e:
+        print(f"Error: no data rows found in {csv_path}")
+        return
+
+    _plot_cdf(ds_e2e, png_path)
+
+
 def generate_cdf_graph(
     all_run_metrics: Dict[str, List[RunMetrics]],
     png_path: str,
@@ -443,16 +480,34 @@ def generate_cdf_graph(
         print("Warning: matplotlib/numpy not available, skipping CDF graph.")
         return
 
-    fig, ax = plt.subplots(figsize=(12, 7))
-
-    # Collect (ds_name, sorted_e2e_values) pairs, sorted by median E2E
-    ds_data = []
+    # Collect {ds_name: [e2e_ns, ...]}
+    ds_e2e: Dict[str, List[int]] = {}
     for exe_base, runs in all_run_metrics.items():
         if not runs:
             continue
         ds_name = runs[0].ds_name or EXE_TO_DS_NAME.get(exe_base, exe_base)
-        e2e_values = sorted([r.e2e_ns for r in runs])
-        ds_data.append((ds_name, e2e_values))
+        ds_e2e[ds_name] = [r.e2e_ns for r in runs]
+
+    if not ds_e2e:
+        return
+
+    _plot_cdf(ds_e2e, png_path)
+
+
+def _plot_cdf(ds_e2e: Dict[str, List[int]], png_path: str) -> None:
+    """Shared CDF plotting logic used by both generate_cdf_graph and generate_cdf_from_csv."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+
+    # Sort data structures by median E2E
+    ds_data = []
+    for ds_name, vals in ds_e2e.items():
+        ds_data.append((ds_name, sorted(vals)))
 
     ds_data.sort(key=lambda d: statistics.median(d[1]))
 
@@ -791,6 +846,9 @@ def main():
             "\n"
             "  # Final benchmark: 100 runs per DS, write CSV + CDF graph\n"
             "  sudo python3 scripts/runner.py --final 100\n"
+            "\n"
+            "  # Generate CDF graph from an existing CSV\n"
+            "  python3 scripts/runner.py --graph final_bench_20260413.csv\n"
         ),
     )
     parser.add_argument(
@@ -822,7 +880,22 @@ def main():
         default=10,
         help="Duration in seconds per trial (default: 10)",
     )
+    parser.add_argument(
+        "--graph",
+        type=str,
+        default=None,
+        metavar="CSV",
+        help="Generate CDF graph from an existing --final CSV file (no benchmarks run)",
+    )
     args = parser.parse_args()
+
+    # --graph mode: just generate the graph and exit
+    if args.graph is not None:
+        if not os.path.isfile(args.graph):
+            print(f"Error: CSV file not found: {args.graph}", file=sys.stderr)
+            return 1
+        generate_cdf_from_csv(args.graph)
+        return 0
 
     print("BPF Arena Data Structures Test Runner")
     print("=" * 60)
