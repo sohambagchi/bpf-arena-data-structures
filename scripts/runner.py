@@ -552,13 +552,13 @@ def find_executables() -> List[str]:
     """Find compiled executables in ./build."""
     candidates = [
         "skeleton_msqueue",
-        "skeleton_vyukhov",
+        # "skeleton_vyukhov",
         "skeleton_folly_spsc",
         "skeleton_ck_fifo_spsc",
         "skeleton_ck_ring_spsc",
         "skeleton_ck_stack_upmc",
-        "skeleton_io_uring",
-        "skeleton_kcov",
+        # "skeleton_io_uring",
+        # "skeleton_kcov",
         "skeleton_iouring_liburing",
     ]
     executables = []
