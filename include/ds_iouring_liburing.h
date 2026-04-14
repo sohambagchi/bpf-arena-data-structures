@@ -449,19 +449,12 @@ int ds_iouring_liburing_cq_produce_lkmm(
 	/* Producer-private: sole writer of prod.tail in SPSC */
 	tail = READ_ONCE(head->prod.tail);
 
-	/* LKMM: control dependency from this READ_ONCE to the subsequent
-	 * WRITE_ONCE stores provides sufficient ordering; acquire NOT needed.
+	/* ACQUIRE to match _c ordering.
 	 *
-	 * Reference: __io_cqring_events (io_uring.c:192) uses
-	 * READ_ONCE(ctx->rings->cq.head), and the comment at lines 762-766
-	 * explains: "writes to the cq entry need to come after reading head;
-	 * the control dependency is enough as we're using WRITE_ONCE to fill
-	 * the cq entry."
-	 *
-	 * The branch below (if tail - h >= ring_entries) creates the control
-	 * dependency: the WRITE_ONCE stores in the success path cannot be
-	 * hoisted above this branch by either the compiler or hardware. */
-	h = READ_ONCE(head->cons.head);
+	 * The original LKMM optimization used READ_ONCE + control dependency
+	 * (io_uring.c lines 762-766), but we upgrade to acquire here so the
+	 * _lkmm variant is ordering-equivalent to the _c variant. */
+	h = smp_load_acquire(&head->cons.head);
 
 	if (tail - h >= head->ring_entries) {
 		arena_atomic_or(&head->sq_flags,

@@ -174,14 +174,14 @@ static inline int __msqueue_add_node_lkmm(struct ds_msqueue_elem __arena *new_no
 
 	/* Enqueue loop */
 	while (retry_count < max_retries && can_loop) {
-		/* Read tail */
+		/* Read tail — ACQUIRE to match _c ordering */
 
-		tail = READ_ONCE(queue->tail);
+		tail = smp_load_acquire(&queue->tail);
 		
 		cast_kern(tail);
 
-		
-		next = READ_ONCE(tail->node.next);
+		/* Read tail->next — ACQUIRE to match _c ordering */
+		next = smp_load_acquire(&tail->node.next);
 		
 		cast_user(next);
 		if (next != NULL) {
@@ -380,16 +380,16 @@ static inline int ds_msqueue_pop_lkmm(struct ds_msqueue __arena *queue, struct d
 
 	/* Dequeue loop */
 	while (retry_count < max_retries && can_loop) {
-		/* Read Head, Tail, and next */
+		/* Read Head, Tail, and next — ACQUIRE to match _c ordering */
 
-		head = READ_ONCE(queue->head);
-		tail = READ_ONCE(queue->tail);
+		head = smp_load_acquire(&queue->head);
+		tail = smp_load_acquire(&queue->tail);
 		
 		cast_kern(head);
-		next = READ_ONCE(head->node.next);
+		next = smp_load_acquire(&head->node.next);
 		
 		cast_user(head);
-		if ( READ_ONCE(queue->head) != head ) {
+		if ( smp_load_acquire(&queue->head) != head ) {
 			retry_count++;
 			continue;
 		}
@@ -418,9 +418,8 @@ static inline int ds_msqueue_pop_lkmm(struct ds_msqueue __arena *queue, struct d
 		data->value = next_elem->data.value;
 
 		cast_user(next_elem);
-		/* LKMM: address dependency chain (head → head->next → next_elem →
-		 * next_elem->data) ensures data visibility; relax CAS to RELAXED */
-		if ( arena_atomic_cmpxchg(&queue->head, head, next_elem, ARENA_RELAXED, ARENA_RELAXED) == head) {
+		/* CAS with ACQUIRE success ordering to match _c */
+		if ( arena_atomic_cmpxchg(&queue->head, head, next_elem, ARENA_ACQUIRE, ARENA_RELAXED) == head) {
 			cast_user(head);
 			bpf_arena_free(head);
 		
@@ -554,8 +553,8 @@ static inline int ds_msqueue_search_lkmm(struct ds_msqueue __arena *queue, __u64
 			return DS_SUCCESS;
 		
 		cast_kern(node);
-		/* LKMM: address dependency from next → node provides ordering */
-		next = READ_ONCE(node->node.next);
+		/* ACQUIRE to match _c ordering for next-pointer traversal */
+		next = smp_load_acquire(&node->node.next);
 		count++;
 	}
 	
@@ -641,8 +640,7 @@ static inline int ds_msqueue_verify_lkmm(struct ds_msqueue __arena *queue)
 	
 	/* Start from Head (dummy node) */
 	cast_kern(head);
-	/* LKMM: address dependency from node_ptr → node provides ordering */
-	struct ds_msqueue_node __arena *node_ptr = READ_ONCE(head->node.next);
+	struct ds_msqueue_node __arena *node_ptr = smp_load_acquire(&head->node.next);
 	if (head == tail && node_ptr == NULL)
 		return DS_SUCCESS;
 	node = (void __arena *)__msqueue_list_entry(node_ptr, struct ds_msqueue_elem, node);
@@ -654,8 +652,7 @@ static inline int ds_msqueue_verify_lkmm(struct ds_msqueue __arena *queue)
 			found_tail = 1;
 		
 		cast_kern(node);
-		/* LKMM: address dependency from node_ptr → node provides ordering */
-		node_ptr = READ_ONCE(node->node.next);
+		node_ptr = smp_load_acquire(&node->node.next);
 		if (node_ptr) {
 			node = (void __arena *)__msqueue_list_entry(node_ptr, struct ds_msqueue_elem, node);
 		} else {
@@ -825,8 +822,7 @@ static inline __u64 ds_msqueue_iterate_lkmm(struct ds_msqueue __arena *queue,
 		if (result != 0)
 			break;
 		
-		/* LKMM: address dependency from next → node provides ordering */
-		next = READ_ONCE(node->node.next);
+		next = smp_load_acquire(&node->node.next);
 		if (next) {
 			cast_user(next);
 			node = (void __arena *)__msqueue_list_entry(next, struct ds_msqueue_elem, node);

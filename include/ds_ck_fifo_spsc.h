@@ -127,8 +127,8 @@ static inline bool ds_ck_fifo_spsc_dequeue_lkmm(struct ds_ck_fifo_spsc __arena *
 
 	head = READ_ONCE(fifo->head);
 	cast_kern(head);
-	/* LKMM: address dependency from entry to entry->value provides ordering */
-	entry = READ_ONCE(head->next);
+	/* ACQUIRE on head->next to match _c ordering */
+	entry = smp_load_acquire(&head->next);
 	cast_user(entry);
 	if (!entry)
 		return false;
@@ -137,8 +137,8 @@ static inline bool ds_ck_fifo_spsc_dequeue_lkmm(struct ds_ck_fifo_spsc __arena *
 	if (value_out)
 		*value_out = READ_ONCE(entry->value);
 
-	/* LKMM: consumer-only field in SPSC; no cross-thread sync needed */
-	WRITE_ONCE(fifo->head, entry);
+	/* RELEASE to match _c ordering */
+	smp_store_release(&fifo->head, entry);
 	return true;
 }
 
