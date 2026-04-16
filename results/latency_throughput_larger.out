@@ -1,0 +1,421 @@
+BPF Arena Data Structures Test Runner
+============================================================
+Found executable: skeleton_msqueue
+Found executable: skeleton_vyukhov
+Found executable: skeleton_folly_spsc
+Found executable: skeleton_ck_fifo_spsc
+Found executable: skeleton_ck_ring_spsc
+Found executable: skeleton_ck_stack_upmc
+Found executable: skeleton_io_uring
+Found executable: skeleton_kcov
+
+Found 8 executable(s)
+CPU count: 4
+
+============================================================
+Running: build/skeleton_msqueue for 10 seconds
+Spawning 1 concurrent touch processes on separate cores
+============================================================
+All 1 worker processes ready on separate cores
+Signaled all workers to start creating files continuously
+  Trace validation PASSED: 892 consumed events matched initial touch input PIDs
+  Trace output file: build/skeleton_msqueue_trace_pipe.log
+
+Results for build/skeleton_msqueue:
+  Return code: 0
+  Elapsed time: 10.32 seconds
+  STDOUT:
+Loading BPF program for integrated MSQueue relay...
+Arena alloc range: base=0x100000001000 size=3996 KB
+MainThread: attached. Trigger inode_create events in another shell.
+Press Ctrl+C to stop and invoke kernel consumer trigger.
+UserThread: waiting for MSQueueKU initialization...
+UserThread: relay loop started (KU -> UK)
+MainThread: triggering kernel consumer uprobe...
+MainThread: consume triggers=892 consumed=892 target=892
+
+============================================================
+                         STATISTICS                         
+============================================================
+Kernel producer (inode_create -> KU):
+  ops=892 failures=0
+Kernel consumer (uprobe pop from UK):
+  ops=892 failures=0 consumed=892
+Userspace relay:
+  KU popped=892 UK pushed=892
+Queue states:
+  KU count=0
+  UK count=0
+============================================================
+              PERFORMANCE METRICS: MSQueue
+============================================================
+Category               Total   Success  Rate%   Avg(ns)  Avg-OK(ns)     Tput-OK
+LKMM producer            892       892 100.0%       169         169     5911630
+User consumer        167705425       892   0.0%        20         211     4723375
+User producer            892       892 100.0%       195         195     5109229
+LKMM consumer            892       892 100.0%       168         168     5949165
+============================================================
+============================================================
+
+
+
+============================================================
+Running: build/skeleton_vyukhov for 10 seconds
+Spawning 1 concurrent touch processes on separate cores
+============================================================
+All 1 worker processes ready on separate cores
+Signaled all workers to start creating files continuously
+  Trace validation FAILED: no consumer output captured in trace_pipe
+
+Results for build/skeleton_vyukhov:
+  Return code: 0
+  Elapsed time: 10.22 seconds
+  STDOUT:
+Loading BPF program for Vyukhov relay...
+Arena alloc range: base=0x100000001000 size=3996 KB
+MainThread: attached. Trigger inode_create events in another shell.
+Press Ctrl+C to stop and invoke kernel consumer trigger.
+UserThread: waiting for VyukhovKU initialization...
+MainThread: triggering kernel consumer uprobe...
+
+============================================================
+                   VYUKHOV RELAY STATISTICS                 
+============================================================
+Kernel producer (inode_create -> KU):
+  ops=0 failures=891
+Kernel consumer (uprobe pop from UK):
+  ops=1 failures=1 consumed=0
+Userspace relay:
+  KU popped=0 UK pushed=0
+Queue states:
+  KU count=0
+  UK count=0
+============================================================
+              PERFORMANCE METRICS: Vyukhov MPMC
+============================================================
+Category               Total   Success  Rate%   Avg(ns)  Avg-OK(ns)     Tput-OK
+LKMM producer              0         0   0.0%         0           0           0
+User consumer              0         0   0.0%         0           0           0
+User producer              0         0   0.0%         0           0           0
+LKMM consumer              0         0   0.0%         0           0           0
+============================================================
+============================================================
+
+
+
+============================================================
+Running: build/skeleton_folly_spsc for 10 seconds
+Spawning 1 concurrent touch processes on separate cores
+============================================================
+All 1 worker processes ready on separate cores
+Signaled all workers to start creating files continuously
+  Trace validation FAILED: no consumer output captured in trace_pipe
+
+Results for build/skeleton_folly_spsc:
+  Return code: 0
+  Elapsed time: 10.33 seconds
+  STDOUT:
+Loading BPF program for Folly SPSC relay...
+Arena alloc range: base=0x100000001000 size=3996 KB
+MainThread: attached. Trigger inode_create events in another shell.
+Press Ctrl+C to stop and invoke kernel consumer trigger.
+UserThread: waiting for FollySPSCKU initialization...
+MainThread: triggering kernel consumer uprobe...
+
+============================================================
+                 FOLLY SPSC RELAY STATISTICS                
+============================================================
+Kernel producer (inode_create -> KU):
+  ops=0 failures=895
+Kernel consumer (uprobe pop from UK):
+  ops=1 failures=1 consumed=0
+Userspace relay:
+  KU popped=0 UK pushed=0
+Queue states:
+  KU size=0
+  UK size=0
+============================================================
+              PERFORMANCE METRICS: Folly SPSC
+============================================================
+Category               Total   Success  Rate%   Avg(ns)  Avg-OK(ns)     Tput-OK
+LKMM producer              0         0   0.0%         0           0           0
+User consumer              0         0   0.0%         0           0           0
+User producer              0         0   0.0%         0           0           0
+LKMM consumer              0         0   0.0%         0           0           0
+============================================================
+============================================================
+
+
+
+============================================================
+Running: build/skeleton_ck_fifo_spsc for 10 seconds
+Spawning 1 concurrent touch processes on separate cores
+============================================================
+All 1 worker processes ready on separate cores
+Signaled all workers to start creating files continuously
+  Trace validation PASSED: 894 consumed events matched initial touch input PIDs
+  Trace output file: build/skeleton_ck_fifo_spsc_trace_pipe.log
+
+Results for build/skeleton_ck_fifo_spsc:
+  Return code: 0
+  Elapsed time: 10.25 seconds
+  STDOUT:
+Loading BPF program for CK FIFO SPSC relay...
+Arena alloc range: base=0x100000001000 size=3996 KB
+MainThread: attached. Trigger inode_create events in another shell.
+Press Ctrl+C to stop and invoke kernel consumer trigger.
+UserThread: waiting for CKFifoSPSCKU initialization...
+UserThread: relay loop started (KU -> UK)
+MainThread: triggering kernel consumer uprobe...
+MainThread: consume triggers=894 consumed=894 target=894
+
+============================================================
+                CK FIFO SPSC RELAY STATISTICS               
+============================================================
+Kernel producer (inode_create -> KU):
+  ops=895 failures=0
+Kernel consumer (uprobe pop from UK):
+  ops=894 failures=0 consumed=894
+Userspace relay:
+  KU popped=894 UK pushed=894
+Queue states:
+  KU empty=no
+  UK empty=yes
+============================================================
+              PERFORMANCE METRICS: CK FIFO SPSC
+============================================================
+Category               Total   Success  Rate%   Avg(ns)  Avg-OK(ns)     Tput-OK
+LKMM producer            895       895 100.0%        40          40    24406872
+User consumer        152353116       894   0.0%        25         114     8759124
+User producer            894       894 100.0%       104         104     9614867
+LKMM consumer            894       894 100.0%        37          37    26626954
+============================================================
+============================================================
+
+
+
+============================================================
+Running: build/skeleton_ck_ring_spsc for 10 seconds
+Spawning 1 concurrent touch processes on separate cores
+============================================================
+All 1 worker processes ready on separate cores
+Signaled all workers to start creating files continuously
+  Trace validation FAILED: no consumer output captured in trace_pipe
+
+Results for build/skeleton_ck_ring_spsc:
+  Return code: 0
+  Elapsed time: 10.31 seconds
+  STDOUT:
+Loading BPF program for CK ring SPSC relay...
+Arena alloc range: base=0x100000001000 size=3996 KB
+MainThread: attached. Trigger inode_create events in another shell.
+Press Ctrl+C to stop and invoke kernel consumer trigger.
+UserThread: waiting for CKRingSPSCKU initialization...
+MainThread: triggering kernel consumer uprobe...
+
+============================================================
+                CK RING SPSC RELAY STATISTICS               
+============================================================
+Kernel producer (inode_create -> KU):
+  ops=0 failures=895
+Kernel consumer (uprobe pop from UK):
+  ops=1 failures=1 consumed=0
+Userspace relay:
+  KU popped=0 UK pushed=0
+Queue states:
+  KU size=0
+  UK size=0
+============================================================
+              PERFORMANCE METRICS: CK Ring SPSC
+============================================================
+Category               Total   Success  Rate%   Avg(ns)  Avg-OK(ns)     Tput-OK
+LKMM producer              0         0   0.0%         0           0           0
+User consumer              0         0   0.0%         0           0           0
+User producer              0         0   0.0%         0           0           0
+LKMM consumer              0         0   0.0%         0           0           0
+============================================================
+============================================================
+
+
+
+============================================================
+Running: build/skeleton_ck_stack_upmc for 10 seconds
+Spawning 1 concurrent touch processes on separate cores
+============================================================
+All 1 worker processes ready on separate cores
+Signaled all workers to start creating files continuously
+  Trace validation PASSED: 894 consumed events matched initial touch input PIDs
+  Trace output file: build/skeleton_ck_stack_upmc_trace_pipe.log
+
+Results for build/skeleton_ck_stack_upmc:
+  Return code: 0
+  Elapsed time: 10.23 seconds
+  STDOUT:
+Loading BPF program for CK stack UPMC relay...
+Arena alloc range: base=0x100000001000 size=3996 KB
+MainThread: attached. Trigger inode_create events in another shell.
+Press Ctrl+C to stop and invoke kernel consumer trigger.
+UserThread: waiting for CKStackUPMCKU initialization...
+UserThread: relay loop started (KU -> UK)
+MainThread: triggering kernel consumer uprobe...
+MainThread: consume triggers=894 consumed=894 target=894
+
+============================================================
+                CK STACK UPMC RELAY STATISTICS              
+============================================================
+Kernel producer (inode_create -> KU):
+  ops=894 failures=0
+Kernel consumer (uprobe pop from UK):
+  ops=894 failures=0 consumed=894
+Userspace relay:
+  KU popped=894 UK pushed=894
+Stack states:
+  KU count=0
+  UK count=0
+============================================================
+              PERFORMANCE METRICS: CK Stack UPMC
+============================================================
+Category               Total   Success  Rate%   Avg(ns)  Avg-OK(ns)     Tput-OK
+LKMM producer            894       894 100.0%       182         182     5492412
+User consumer        172583960       894   0.0%        19         115     8645449
+User producer            894       894 100.0%       206         206     4852419
+LKMM consumer            894       894 100.0%        36          36    27624138
+============================================================
+============================================================
+
+
+
+============================================================
+Running: build/skeleton_io_uring for 10 seconds
+Spawning 1 concurrent touch processes on separate cores
+============================================================
+All 1 worker processes ready on separate cores
+Signaled all workers to start creating files continuously
+  Trace validation FAILED: no consumer output captured in trace_pipe
+
+Results for build/skeleton_io_uring:
+  Return code: 0
+  Elapsed time: 10.23 seconds
+  STDOUT:
+Loading BPF program for IO_URING relay...
+Arena alloc range: base=0x100000001000 size=3996 KB
+MainThread: attached. Trigger inode_create events in another shell.
+Press Ctrl+C to stop and invoke kernel consumer trigger.
+UserThread: waiting for IO_URING KU initialization...
+MainThread: triggering kernel consumer uprobe...
+
+============================================================
+                  IO_URING RELAY STATISTICS                 
+============================================================
+Kernel producer (inode_create -> KU):
+  ops=0 failures=895
+Kernel consumer (uprobe pop from UK):
+  ops=1 failures=1 consumed=0
+Userspace relay:
+  KU popped=0 UK pushed=0
+Queue states:
+  KU size=0
+  UK size=0
+============================================================
+              PERFORMANCE METRICS: IO_URING Ring
+============================================================
+Category               Total   Success  Rate%   Avg(ns)  Avg-OK(ns)     Tput-OK
+LKMM producer              0         0   0.0%         0           0           0
+User consumer              0         0   0.0%         0           0           0
+User producer              0         0   0.0%         0           0           0
+LKMM consumer              0         0   0.0%         0           0           0
+============================================================
+============================================================
+
+
+
+============================================================
+Running: build/skeleton_kcov for 10 seconds
+Spawning 1 concurrent touch processes on separate cores
+============================================================
+All 1 worker processes ready on separate cores
+Signaled all workers to start creating files continuously
+  Trace validation PASSED: 254 consumed events matched initial touch input PIDs
+  Trace output file: build/skeleton_kcov_trace_pipe.log
+
+Results for build/skeleton_kcov:
+  Return code: 0
+  Elapsed time: 10.20 seconds
+  STDOUT:
+Loading BPF program for KCOV relay...
+Arena alloc range: base=0x100000001000 size=3996 KB
+MainThread: attached. Trigger inode_create events in another shell.
+Press Ctrl+C to stop and invoke kernel consumer trigger.
+UserThread: waiting for KCOV KU initialization...
+UserThread: relay loop started (KU -> UK)
+MainThread: triggering kernel consumer uprobe...
+MainThread: consume triggers=254 consumed=254 target=254
+
+============================================================
+                   KCOV RELAY STATISTICS                    
+============================================================
+Kernel producer (inode_create -> KU):
+  ops=894 failures=0
+Kernel consumer (uprobe pop from UK):
+  ops=254 failures=0 consumed=254
+Userspace relay:
+  KU popped=894 UK pushed=254
+Buffer states:
+  KU current entries: (see area[0])
+  UK current entries: (see area[0])
+============================================================
+              PERFORMANCE METRICS: KCOV Buffer
+============================================================
+Category               Total   Success  Rate%   Avg(ns)  Avg-OK(ns)     Tput-OK
+LKMM producer            894       894 100.0%        77          77    12917395
+User consumer        171971538       894   0.0%        19          80    12372674
+User producer            894       254  28.4%       141         145     6890190
+LKMM consumer            254       254 100.0%        22          22    44405594
+============================================================
+============================================================
+
+
+
+============================================================
+SUMMARY
+============================================================
+build/skeleton_msqueue:
+  Success: Yes
+  Trace match: Yes
+  Time: 10.32s
+  Workers: 1
+build/skeleton_vyukhov:
+  Success: Yes
+  Trace match: No
+  Time: 10.22s
+  Workers: 1
+build/skeleton_folly_spsc:
+  Success: Yes
+  Trace match: No
+  Time: 10.33s
+  Workers: 1
+build/skeleton_ck_fifo_spsc:
+  Success: Yes
+  Trace match: Yes
+  Time: 10.25s
+  Workers: 1
+build/skeleton_ck_ring_spsc:
+  Success: Yes
+  Trace match: No
+  Time: 10.31s
+  Workers: 1
+build/skeleton_ck_stack_upmc:
+  Success: Yes
+  Trace match: Yes
+  Time: 10.23s
+  Workers: 1
+build/skeleton_io_uring:
+  Success: Yes
+  Trace match: No
+  Time: 10.23s
+  Workers: 1
+build/skeleton_kcov:
+  Success: Yes
+  Trace match: Yes
+  Time: 10.20s
+  Workers: 1
