@@ -1,4 +1,4 @@
-# Architecture Diagrams (Current Relay Model)
+# Architecture Diagrams
 
 ## End-to-end data path
 
@@ -30,6 +30,55 @@
   |                     Kernel BPF Program                        |
   |  SEC("uprobe.s") consumer                                     |
   |  pop UK, update consume counters                              |
+  +---------------------------------------------------------------+
+```
+
+## One-way arena data path
+
+```text
+                inode_create event (e.g., touch /tmp/x)
+                                 |
+                                 v
+  +---------------------------------------------------------------+
+  |                     Kernel BPF Program                        |
+  |  SEC("lsm.s/inode_create") producer                          |
+  |  insert(pid, timestamp) -> KU lane                            |
+  +---------------------------------------------------------------+
+                                 |
+                                 v
+  +---------------------------------------------------------------+
+  |             BPF_MAP_TYPE_ARENA (mmap shared region)           |
+  |                     KU lane (kernel->user)                    |
+  +---------------------------------------------------------------+
+                                 |
+                                 v
+  +---------------------------------------------------------------+
+  |                 Userspace benchmark binary                    |
+  |  one-way thread: pop KU, record E2E, stop on Ctrl+C          |
+  +---------------------------------------------------------------+
+```
+
+## Ringbuf baseline data path
+
+```text
+                inode_create event (e.g., touch /tmp/x)
+                                 |
+                                 v
+  +---------------------------------------------------------------+
+  |                     Kernel BPF Program                        |
+  |  SEC("lsm.s/inode_create") producer                          |
+  |  bpf_ringbuf_reserve/submit(pid, timestamp)                   |
+  +---------------------------------------------------------------+
+                                 |
+                                 v
+  +---------------------------------------------------------------+
+  |                   BPF_MAP_TYPE_RINGBUF                        |
+  +---------------------------------------------------------------+
+                                 |
+                                 v
+  +---------------------------------------------------------------+
+  |                 Userspace benchmark binary                    |
+  |  ring_buffer__poll() callback records delivery + E2E          |
   +---------------------------------------------------------------+
 ```
 
@@ -66,14 +115,18 @@ src/skeleton_<name>.c
 ## Current app matrix
 
 ```text
-Algorithm          Relay binary                   Header
----------          ------------                   ------
-MS Queue           build/skeleton_msqueue         include/ds_msqueue.h
-Vyukhov MPMC       build/skeleton_vyukhov         include/ds_vyukhov.h
-Folly SPSC         build/skeleton_folly_spsc      include/ds_folly_spsc.h
-CK FIFO SPSC       build/skeleton_ck_fifo_spsc    include/ds_ck_fifo_spsc.h
-CK Ring SPSC       build/skeleton_ck_ring_spsc    include/ds_ck_ring_spsc.h
-CK Stack UPMC      build/skeleton_ck_stack_upmc   include/ds_ck_stack_upmc.h
+Algorithm                  Binary                          Header
+---------                  ------                          ------
+MS Queue                   build/skeleton_msqueue          include/ds_msqueue.h
+Vyukhov MPMC               build/skeleton_vyukhov          include/ds_vyukhov.h
+Folly SPSC                 build/skeleton_folly_spsc       include/ds_folly_spsc.h
+CK FIFO SPSC               build/skeleton_ck_fifo_spsc     include/ds_ck_fifo_spsc.h
+CK Ring SPSC               build/skeleton_ck_ring_spsc     include/ds_ck_ring_spsc.h
+CK Stack UPMC              build/skeleton_ck_stack_upmc    include/ds_ck_stack_upmc.h
+io_uring Ring              build/skeleton_io_uring         include/ds_io_uring.h
+io_uring/liburing Ring     build/skeleton_iouring_liburing include/ds_iouring_liburing.h
+kcov Buffer                build/skeleton_kcov             include/ds_kcov.h
+Ringbuf baseline           build/skeleton_ringbuf          include/ringbuf_bench.h
 ```
 
 ## Testing paths
@@ -81,6 +134,12 @@ CK Stack UPMC      build/skeleton_ck_stack_upmc   include/ds_ck_stack_upmc.h
 ```text
 BPF relay path:
   sudo build/skeleton_<name> [-v]
+
+BPF one-way arena path:
+  DS_ONE_WAY=1 sudo build/skeleton_<name> [-v]
+
+BPF ringbuf baseline:
+  sudo build/skeleton_ringbuf [-v]
 
 Userspace-only path:
   python3 scripts/usertests.py --build

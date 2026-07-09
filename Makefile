@@ -6,9 +6,9 @@
 #
 # USAGE:
 #   make                    # Build all programs
-#   make skeleton           # Build just the skeleton test program
+#   make usertest           # Build just the userspace-only tests
 #   make clean              # Remove all build artifacts
-#   make test               # Run basic smoke tests
+#   make test               # Print suggested manual smoke-test commands
 #
 # CUSTOMIZATION:
 #   Set CLANG to use a specific clang version
@@ -100,7 +100,7 @@ ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
 # List of all applications to build
 # - BPF_APPS: BPF-backed (need skeleton generation + libbpf)
 # - USERTEST_APPS: pure userspace pthread tests (no BPF, no CLI args)
-BPF_APPS = skeleton_msqueue skeleton_vyukhov skeleton_folly_spsc skeleton_ck_fifo_spsc skeleton_ck_ring_spsc skeleton_ck_stack_upmc skeleton_io_uring skeleton_kcov skeleton_iouring_liburing
+BPF_APPS = skeleton_msqueue skeleton_vyukhov skeleton_folly_spsc skeleton_ck_fifo_spsc skeleton_ck_ring_spsc skeleton_ck_stack_upmc skeleton_io_uring skeleton_kcov skeleton_iouring_liburing skeleton_ringbuf
 USERTEST_APPS = usertest_msqueue usertest_vyukhov usertest_folly_spsc usertest_ck_fifo_spsc usertest_ck_ring_spsc usertest_ck_stack_upmc
 APPS = $(BPF_APPS) $(USERTEST_APPS)
 
@@ -157,8 +157,10 @@ all: $(BINARIES)
 	@for app in $(BINARIES); do echo "  - $$app"; done
 	@echo ""
 	@echo "Run tests (binaries are placed in $(OUT_DIR)):" 
-	@echo "  sudo $(OUT_DIR)/skeleton_msqueue -d 5    # run msqueue test (5s)"
-	@echo "  Use -v to enable verification on exit: sudo $(OUT_DIR)/skeleton_msqueue -v"
+	@echo "  sudo $(OUT_DIR)/skeleton_msqueue         # run relay benchmark interactively"
+	@echo "  DS_ONE_WAY=1 sudo $(OUT_DIR)/skeleton_msqueue   # one-way kernel->userspace mode"
+	@echo "  sudo $(OUT_DIR)/skeleton_ringbuf         # BPF_MAP_TYPE_RINGBUF baseline"
+	@echo "  Use -v to enable verification on exit"
 
 .PHONY: clean
 clean:
@@ -291,33 +293,21 @@ $(OUT_DIR)/%.S: $(OUT_DIR)/% | $(OUT_DIR)
 	$(Q)$(OBJDUMP) -d -M intel -S $< > $@
 
 .PHONY: test
-test: $(OUT_DIR)/skeleton $(OUT_DIR)/skeleton_msqueue
-	@echo "Running basic tests..."
-	@echo ""
-	@echo "Test 1: Skeleton MS Queue - 5 second sleep"
-	sudo $(OUT_DIR)/skeleton_msqueue -d 5 || (echo "FAILED: skeleton_msqueue"; exit 1)
-	@echo ""
-	@echo "All tests passed!"
+test: $(OUT_DIR)/skeleton_msqueue $(OUT_DIR)/skeleton_ringbuf
+	@echo "Run smoke tests manually on a suitable root-enabled machine:"
+	@echo "  sudo $(OUT_DIR)/skeleton_msqueue"
+	@echo "  DS_ONE_WAY=1 sudo $(OUT_DIR)/skeleton_msqueue"
+	@echo "  sudo $(OUT_DIR)/skeleton_ringbuf"
 
 .PHONY: test-stress
 
-test-stress: $(OUT_DIR)/skeleton $(OUT_DIR)/skeleton_msqueue
-	@echo "Running stress tests..."
-	@echo "This may take a few minutes..."
-	@echo ""
-	@echo "Stress test 1: Skeleton MS Queue - 30 second sleep"
-	sudo $(OUT_DIR)/skeleton_msqueue -d 30 || (echo "FAILED"; exit 1)
-	@echo ""
-	@echo "Stress tests passed!"
+test-stress: $(OUT_DIR)/skeleton_msqueue $(OUT_DIR)/skeleton_ringbuf
+	@echo "Stress tests are workload-specific; use scripts/benchmarking.py on a test machine."
 
 .PHONY: test-verify
 
-test-verify: $(OUT_DIR)/skeleton $(OUT_DIR)/skeleton_msqueue
-	@echo "Running verification tests..."
-	@echo ""
-	@echo "Test 1: Skeleton MS Queue with verification"
-	sudo $(OUT_DIR)/skeleton_msqueue -d 5 -v || (echo "FAILED"; exit 1)
-	@echo "Verification tests passed!"
+test-verify: $(OUT_DIR)/skeleton_msqueue $(OUT_DIR)/skeleton_ringbuf
+	@echo "Verification should be run manually with -v on a root-enabled test machine."
 
 # ============================================================================
 # HELP TARGET
@@ -335,11 +325,11 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  all          Build all programs (default)"
-	@echo "  skeleton     Build skeleton test program"
+	@echo "  usertest     Build userspace-only test programs"
 	@echo "  clean        Remove all build artifacts"
-	@echo "  test         Run basic smoke tests"
-	@echo "  test-stress  Run stress tests"
-	@echo "  test-verify  Run verification tests (uses -v)"
+	@echo "  test         Print suggested manual smoke-test commands"
+	@echo "  test-stress  Print suggested benchmark entrypoint"
+	@echo "  test-verify  Print suggested manual verification commands"
 	@echo "  help         Show this help message"
 	@echo ""
 	@echo "Options:"
@@ -349,9 +339,11 @@ help:
 	@echo "  make                    # Build everything (binaries placed in $(OUT_DIR))"
 	@echo "  make clean && make      # Clean build"
 	@echo "  make V=1 skeleton_msqueue       # Verbose build of skeleton MS Queue"
-	@echo "  make test               # Run smoke tests (invokes built binaries under $(OUT_DIR))"
-	@echo "  sudo $(OUT_DIR)/skeleton_msqueue     # Run the skeleton MS Queue test (interactive)"
-	@echo "  sudo $(OUT_DIR)/skeleton_msqueue -v  # Run with verification on exit"
+	@echo "  make usertest                   # Build userspace-only tests"
+	@echo "  sudo $(OUT_DIR)/skeleton_msqueue     # Run the relay benchmark interactively"
+	@echo "  DS_ONE_WAY=1 sudo $(OUT_DIR)/skeleton_msqueue  # Run one-way arena mode"
+	@echo "  sudo $(OUT_DIR)/skeleton_ringbuf     # Run the ringbuf baseline"
+	@echo "  sudo python3 scripts/benchmarking.py --one-way # Benchmark one-way transports"
 
 # ============================================================================
 # MAKE DIRECTIVES

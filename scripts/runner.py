@@ -1,8 +1,10 @@
 """
-Runner script for BPF arena data structure executables.
+Runner script for BPF arena relay executables.
 Spawns concurrent processes on separate cores to stress test during execution.
 
 Prints a DATA_STRUCTURES_1.md-style comparison table at the end of every run.
+This runner remains relay-oriented; for one-way arena-vs-ringbuf comparisons,
+use `scripts/benchmarking.py --one-way`.
 
 With --final N, repeats all data structure runs N times (default 1000),
 writes a timestamped CSV with per-run metrics, and generates a CDF graph
@@ -552,13 +554,13 @@ def find_executables() -> List[str]:
     """Find compiled executables in ./build."""
     candidates = [
         "skeleton_msqueue",
-        # "skeleton_vyukhov",
+        "skeleton_vyukhov",
         "skeleton_folly_spsc",
         "skeleton_ck_fifo_spsc",
         "skeleton_ck_ring_spsc",
         "skeleton_ck_stack_upmc",
-        # "skeleton_io_uring",
-        # "skeleton_kcov",
+        "skeleton_io_uring",
+        "skeleton_kcov",
         "skeleton_iouring_liburing",
     ]
     executables = []

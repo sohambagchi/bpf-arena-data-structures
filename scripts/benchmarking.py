@@ -138,6 +138,8 @@ SKELETON_CANDIDATES = [
     "skeleton_ck_stack_upmc",
     "skeleton_io_uring",
     "skeleton_kcov",
+    "skeleton_iouring_liburing",
+    "skeleton_ringbuf",
 ]
 
 USERTEST_CANDIDATES = [
@@ -367,18 +369,16 @@ def parse_done_line(text: str) -> Optional[int]:
     return None
 
 
-def parse_relay_count(text: str) -> Optional[int]:
-    """Parse 'KU popped=N' from skeleton statistics output.
+def parse_delivered_count(text: str) -> Optional[int]:
+    """Parse a ground-truth delivered-message count from benchmark output.
 
-    All skeleton programs print this line in their print_statistics()
-    function.  This is the ground-truth count of messages successfully
-    relayed through the kernel->user->kernel pipeline and is a more
-    reliable throughput numerator than the metrics ring success count
-    (which can be inflated by busy-loop empty-queue polls).
+    Relay-mode arena skeletons print ``KU popped=N``.
+    One-way transports additionally print ``Delivered=N``.
     """
-    m = re.search(r"KU popped=(\d+)", text)
-    if m:
-        return int(m.group(1))
+    for pat in (r"Delivered=(\d+)", r"KU popped=(\d+)"):
+        m = re.search(pat, text)
+        if m:
+            return int(m.group(1))
     return None
 
 
@@ -599,17 +599,18 @@ def _populate_result_from_output(result: TrialResult, stdout: str) -> None:
         result.elapsed_sec = bench_elapsed
 
     # --- Throughput computation ---
-    # For skeleton programs, the ground-truth relay count ("KU popped=N")
-    # is far more reliable than the metrics ring success count.  The
+    # For skeleton programs, the ground-truth delivered count
+    # ("KU popped=N" or "Delivered=N") is far more reliable than the
+    # metrics ring success count.  The
     # latter can be inflated by busy-loop empty-queue polls recorded
     # as metric samples (the success flag is per-sample, but the
     # aggregate success_count in the ring counter reflects actual
     # DS_SUCCESS returns, which in some data structures can include
     # vacuous successes).  The relay count is always exactly the number
     # of messages that traversed the full pipeline.
-    relay_count = parse_relay_count(stdout)
-    if relay_count is not None and relay_count > 0 and result.elapsed_sec > 0:
-        result.wallclock_throughput = relay_count / result.elapsed_sec
+    delivered_count = parse_delivered_count(stdout)
+    if delivered_count is not None and delivered_count > 0 and result.elapsed_sec > 0:
+        result.wallclock_throughput = delivered_count / result.elapsed_sec
         return
 
     # Fallback: derive from the best available metrics category
@@ -797,9 +798,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         description="Benchmark BPF arena data structures with varying batch sizes.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "By default only BPF skeleton programs are benchmarked.\n"
+            "By default only arena skeleton programs are benchmarked.\n"
             "Use --include-usertest or --usertest-only to add/select\n"
-            "pure-userspace test executables.\n"
+            "pure-userspace test executables.  Use --one-way for\n"
+            "kernel->userspace arena/ringbuf transport comparisons.\n"
             "\n"
             "Examples:\n"
             "  # Benchmark all skeleton executables, default settings\n"
@@ -808,6 +810,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             "  # Benchmark only skeleton_msqueue, batch sizes 1 and 64, 5 runs\n"
             "  sudo python3 scripts/benchmarking.py skeleton_msqueue "
             "--batch-sizes 1,64 --runs 5\n"
+            "\n"
+            "  # One-way transport comparison (arena one-way + ringbuf)\n"
+            "  sudo python3 scripts/benchmarking.py --one-way\n"
             "\n"
             "  # Include usertests too, write CSV\n"
             "  sudo python3 scripts/benchmarking.py --include-usertest "
@@ -867,6 +872,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Also include pure-userspace test executables (default: skeleton only)",
     )
     parser.add_argument(
+        "--one-way",
+        action="store_true",
+        help="Run arena skeletons in kernel->userspace one-way mode",
+    )
+    parser.add_argument(
         "--usertest-only",
         action="store_true",
         help="Benchmark only pure-userspace test executables",
@@ -892,6 +902,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.usertest_only:
         all_exes = [e for e in all_exes if not is_skeleton(e)]
 
+    explicit_ringbuf = any(
+        os.path.basename(e) == "skeleton_ringbuf" or e == "skeleton_ringbuf"
+        for e in args.executables
+    )
+    if not args.one_way and not explicit_ringbuf:
+        all_exes = [e for e in all_exes if os.path.basename(e) != "skeleton_ringbuf"]
+
     if args.executables:
         filter_set = set(args.executables)
         all_exes = [
@@ -904,12 +921,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # ---- banner ----
     print("=" * 72)
-    print("  BPF Arena Data Structures - Benchmark Suite")
+    print("  BPF Data Structures / Ringbuf Benchmark Suite")
     print("=" * 72)
     print(f"  Executables : {', '.join(os.path.basename(e) for e in all_exes)}")
     print(f"  Batch sizes : {batch_sizes}")
     print(f"  Runs/config : {args.runs}")
     print(f"  Duration(s) : {args.duration} (skeleton programs)")
+    print(f"  One-way     : {args.one_way}")
     print(f"  CPU count   : {multiprocessing.cpu_count()}")
     print("=" * 72)
     print()
@@ -917,6 +935,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     # ---- run benchmark matrix ----
     # results[exe_basename] -> list of AggregatedResult (one per batch size)
     results: Dict[str, List[AggregatedResult]] = defaultdict(list)
+
+    if args.one_way:
+        os.environ["DS_ONE_WAY"] = "1"
+    else:
+        os.environ.pop("DS_ONE_WAY", None)
 
     total_trials = len(all_exes) * len(batch_sizes) * args.runs
     trial_num = 0

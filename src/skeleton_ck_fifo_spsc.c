@@ -21,11 +21,13 @@
 struct test_config {
 	bool verify;
 	bool print_stats;
+	bool one_way;
 };
 
 static struct test_config config = {
 	.verify = false,
 	.print_stats = true,
+	.one_way = false,
 };
 
 static struct skeleton_ck_fifo_spsc_bpf *skel;
@@ -44,6 +46,14 @@ static void signal_handler(int sig)
 {
 	(void)sig;
 	stop_test = 1;
+}
+
+static void apply_env_config(void)
+{
+	const char *env = getenv("DS_ONE_WAY");
+
+	if (env && env[0] && strcmp(env, "0") != 0)
+		config.one_way = true;
 }
 
 static int setup_userspace_allocator(void)
@@ -85,6 +95,9 @@ static int attach_programs(void)
 		return err;
 	skel->links.lsm_inode_create = lsm_link;
 
+	if (config.one_way)
+		return 0;
+
 	consume_link = bpf_program__attach_uprobe_opts(
 		skel->progs.bpf_ck_fifo_spsc_consume,
 		getpid(),
@@ -120,7 +133,7 @@ static void *relay_worker(void *arg)
 	printf("UserThread: relay loop started (KU -> UK)\n");
 
 	while (!stop_test) {
-		if (!uk_initialized) {
+		if (!config.one_way && !uk_initialized) {
 			if (!head_uk->fifo.head || !head_uk->fifo.tail) {
 				ret = ds_ck_fifo_spsc_init_c(head_uk);
 				if (ret == DS_SUCCESS)
@@ -137,6 +150,11 @@ static void *relay_worker(void *arg)
 			int ins_ret;
 
 			ku_dequeued_count++;
+			if (config.one_way) {
+				if (data.value > 0)
+					DS_METRICS_RECORD_E2E(&skel->arena->global_metrics, data.value);
+				continue;
+			}
 			if (uk_initialized) {
 				DS_METRICS_RECORD_OP(&skel->arena->global_metrics, DS_METRICS_USER_PRODUCER, {
 					ins_ret = ds_ck_fifo_spsc_insert_c(head_uk, data.key, data.value);
@@ -234,11 +252,17 @@ static void print_statistics(void)
 	printf("  KU popped=%llu UK pushed=%llu\n",
 	       (unsigned long long)ku_dequeued_count,
 	       (unsigned long long)uk_enqueued_count);
+	if (config.one_way)
+		printf("  Delivered=%llu\n",
+		       (unsigned long long)ku_dequeued_count);
 
 	printf("Queue states:\n");
 	printf("  KU empty=%s\n", ku_empty ? "yes" : "no");
 	printf("  UK empty=%s\n", uk_empty ? "yes" : "no");
-	ds_metrics_print(&skel->arena->global_metrics, "CK FIFO SPSC");
+	if (config.one_way)
+		ds_metrics_print_oneway(&skel->arena->global_metrics, "CK FIFO SPSC");
+	else
+		ds_metrics_print(&skel->arena->global_metrics, "CK FIFO SPSC");
 	printf("============================================================\n\n");
 }
 
@@ -247,6 +271,7 @@ static void print_usage(const char *prog)
 	printf("Usage: %s [OPTIONS]\n\n", prog);
 	printf("CK FIFO SPSC relay test (kernel->user->kernel lanes)\n\n");
 	printf("OPTIONS:\n");
+	printf("  -1      Run in one-way kernel->userspace benchmark mode\n");
 	printf("  -v      Verify both queues on exit\n");
 	printf("  -s      Print statistics on exit (default: enabled)\n");
 	printf("  -h      Show this help\n\n");
@@ -254,14 +279,19 @@ static void print_usage(const char *prog)
 	printf("  inode_create -> CKFifoSPSCKU (kernel producer)\n");
 	printf("  UserThread relays KU -> UK (busy loop)\n");
 	printf("  Ctrl+C triggers uprobe-based kernel consumer on UK\n");
+	printf("\nEnvironment:\n");
+	printf("  DS_ONE_WAY=1   enable one-way kernel->userspace mode\n");
 }
 
 static int parse_args(int argc, char **argv)
 {
 	int opt;
 
-	while ((opt = getopt(argc, argv, "vsh")) != -1) {
+	while ((opt = getopt(argc, argv, "1vsh")) != -1) {
 		switch (opt) {
+		case '1':
+			config.one_way = true;
+			break;
 		case 'v':
 			config.verify = true;
 			break;
@@ -286,6 +316,8 @@ int main(int argc, char **argv)
 
 	if (parse_args(argc, argv) < 0)
 		return 1;
+
+	apply_env_config();
 
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
@@ -317,18 +349,25 @@ int main(int argc, char **argv)
 	}
 	relay_thread_started = true;
 
-	printf("MainThread: attached. Trigger inode_create events in another shell.\n");
-	printf("Press Ctrl+C to stop and invoke kernel consumer trigger.\n");
+	if (config.one_way) {
+		printf("MainThread: attached in one-way mode. Trigger inode_create events in another shell.\n");
+		printf("Press Ctrl+C to stop.\n");
+	} else {
+		printf("MainThread: attached. Trigger inode_create events in another shell.\n");
+		printf("Press Ctrl+C to stop and invoke kernel consumer trigger.\n");
+	}
 
 	while (!stop_test) {
 		usleep(1000);
-		ck_fifo_spsc_kernel_consume_trigger();
+		if (!config.one_way)
+			ck_fifo_spsc_kernel_consume_trigger();
 	}
 
 	if (relay_thread_started)
 		pthread_join(relay_thread, NULL);
 
-	trigger_kernel_consumer_on_exit();
+	if (!config.one_way)
+		trigger_kernel_consumer_on_exit();
 
 	if (config.verify)
 		verify_data_structure();

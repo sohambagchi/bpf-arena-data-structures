@@ -284,7 +284,7 @@ externally.
 `scripts/benchmarking.py` orchestrates the full benchmark matrix:
 
 ```text
-for each executable (8 skeleton programs by default):
+for each executable (all built arena skeleton programs by default; ringbuf when `--one-way` or explicitly requested):
   for each batch size (1, 2, 4, 8, 16, 32, 64, 128, 256):
     for each run (default 10):
       1. Spawn touch workers (batch_size files per burst)
@@ -292,7 +292,7 @@ for each executable (8 skeleton programs by default):
       3. Let it run for --duration seconds (default 10)
       4. Send SIGTERM, wait up to 15s for cleanup
       5. Parse stdout for BENCH block (or legacy table fallback)
-      6. Parse "KU popped=N" for ground-truth relay count
+      6. Parse "Delivered=N" or "KU popped=N" for ground-truth delivery count
       7. Record TrialResult
     Aggregate: median throughput, median p50, median p99
 ```
@@ -301,9 +301,9 @@ for each executable (8 skeleton programs by default):
 
 Throughput is determined with a priority chain:
 
-1. **Primary**: `KU popped=N` from skeleton output / elapsed seconds.
-   This is the ground-truth count of messages that traversed the full
-   relay pipeline.
+1. **Primary**: `Delivered=N` or `KU popped=N` from skeleton output /
+   elapsed seconds.  This is the ground-truth count of messages that
+   reached userspace delivery.
 2. **Fallback**: The `tput` field from the best available metrics
    category (`user_consumer` > `lkmm_producer` > `user_producer` >
    `lkmm_consumer`), with a sanity cap of 10 billion msg/s.
@@ -334,15 +334,18 @@ per-run p50/p99 values.
 ### Prerequisites
 
 ```bash
-make            # Build all 14 targets (8 skeleton + 6 usertest)
+make            # Build all benchmark binaries
 ```
 
 ### Basic usage
 
 ```bash
-# Benchmark all skeleton programs with default settings
+# Benchmark all arena skeleton programs with default settings
 # (batch sizes 1-256, 10 runs per config, 10s per trial)
 sudo python3 scripts/benchmarking.py
+
+# Compare one-way arena transports against the ringbuf baseline
+sudo python3 scripts/benchmarking.py --one-way
 
 # Benchmark a single data structure
 sudo python3 scripts/benchmarking.py skeleton_msqueue
@@ -362,8 +365,9 @@ sudo python3 scripts/benchmarking.py -v
 
 ### Including usertest programs
 
-By default, only BPF skeleton programs are benchmarked.  Usertest
-programs (pure userspace, no BPF) can be included:
+By default, only arena skeleton programs are benchmarked.  Usertest
+programs (pure userspace, no BPF) can be included.  The ringbuf baseline
+is included by `--one-way` or by naming `skeleton_ringbuf` explicitly:
 
 ```bash
 # Add usertests alongside skeletons
@@ -371,6 +375,9 @@ sudo python3 scripts/benchmarking.py --include-usertest
 
 # Benchmark usertests only (no sudo required)
 python3 scripts/benchmarking.py --usertest-only
+
+# Benchmark the ringbuf baseline explicitly
+sudo python3 scripts/benchmarking.py skeleton_ringbuf
 ```
 
 ### Full option reference
@@ -385,12 +392,16 @@ python3 scripts/benchmarking.py --usertest-only
 | `--show-output`       | off                         | Stream executable stdout to terminal     |
 | `--include-usertest`  | off                         | Also benchmark usertest binaries         |
 | `--usertest-only`     | off                         | Benchmark only usertest binaries         |
+| `--one-way`           | off                         | Run arena skeletons in kernel->userspace mode |
 | `-v`, `--verbose`     | off                         | Print per-trial details                  |
 
 ### Typical run time
 
-With defaults (8 executables, 9 batch sizes, 10 runs, 10s each):
-8 x 9 x 10 x ~12s = ~14,400s (~4 hours).
+With defaults, total runtime scales as:
+`num_executables x num_batch_sizes x runs x ~12s`.
+
+For example, with 10 executables, 9 batch sizes, 10 runs, 10s each:
+10 x 9 x 10 x ~12s = ~10,800s (~3 hours).
 
 For quick validation, use fewer runs and batch sizes:
 
@@ -398,7 +409,8 @@ For quick validation, use fewer runs and batch sizes:
 sudo python3 scripts/benchmarking.py --batch-sizes 1,64 --runs 2 --duration 5
 ```
 
-This completes in roughly 8 x 2 x 2 x ~7s = ~224s (~4 minutes).
+With 10 executables this completes in roughly
+10 x 2 x 2 x ~7s = ~280s (~5 minutes).
 
 ## Interpreting results
 
@@ -418,7 +430,7 @@ skeleton_msqueue                    64   10             3,456          71.50    
 ```
 
 - **Med Tput**: Median throughput across runs.  Higher is better.
-  Derived from the relay count (`KU popped=N / elapsed`).
+  Derived from the delivered count (`Delivered=N` or `KU popped=N`) divided by elapsed time.
 - **Med p50**: Median of per-run 50th percentile end-to-end latency.
   This is the "typical" latency for a message traversing the full
   pipeline.  Lower is better.
@@ -478,10 +490,11 @@ For the 8192-sample window this provides sub-0.1% resolution at p99.
 
 ### Throughput from relay count
 
-The relay count (`KU popped=N`) is used as the primary throughput
-numerator because the per-category metrics rings can be inflated by
-busy-loop empty-queue polls.  The relay count is always exactly the
-number of messages that completed the KU pop, regardless of how many
+The delivered count (`Delivered=N` in one-way mode or `KU popped=N` in
+relay mode) is used as the primary throughput numerator because the
+per-category metrics rings can be inflated by busy-loop empty-queue polls.
+The delivered count is always exactly the number of messages that
+completed the userspace receive step, regardless of how many
 times the relay thread polled an empty queue.
 
 ### SIGTERM timeout
@@ -543,8 +556,10 @@ after exhausting retries.
 
 | File | Role |
 |------|------|
-| `include/ds_metrics.h` | Metrics infrastructure: rings, recording macros, percentile computation, parseable output |
+| `include/ds_metrics.h` | Arena metrics infrastructure: rings, recording macros, percentile computation, parseable output, one-way printer |
+| `include/ringbuf_bench.h` | Non-arena ringbuf benchmark metrics and parseable output helpers |
 | `include/ds_api.h` | `struct ds_kv` definition (`key` + `value` fields), result codes |
-| `src/skeleton_*.bpf.c` | BPF programs: LKMM producer (LSM hook) stamps `bpf_ktime_get_ns()` in `value`; LKMM consumer (uprobe) calls `DS_METRICS_RECORD_E2E` on successful pop |
-| `src/skeleton_*.c` | Userspace skeleton binaries: relay thread (passthrough), `print_statistics()` calls `ds_metrics_print()` which emits BENCH block |
+| `src/skeleton_*.bpf.c` | Arena BPF programs: LKMM producer stamps `bpf_ktime_get_ns()` in `value`; relay mode consumers record E2E on successful pop |
+| `src/skeleton_*.c` | Arena userspace skeleton binaries: relay thread or one-way consumer; `print_statistics()` emits BENCH output |
+| `src/skeleton_ringbuf.bpf.c` / `src/skeleton_ringbuf.c` | `BPF_MAP_TYPE_RINGBUF` one-way baseline |
 | `scripts/benchmarking.py` | Benchmark orchestration: batch-size matrix, multi-run trials, output parsing, aggregation, reporting |

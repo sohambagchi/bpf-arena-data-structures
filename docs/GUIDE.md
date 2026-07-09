@@ -4,16 +4,17 @@ This guide describes the current repository state.
 
 ## Overview
 
-The project implements and tests arena-backed concurrent data structures with a two-lane relay model:
+The project implements and tests arena-backed concurrent data structures with two execution modes plus a ringbuf baseline:
 
-1. Kernel producer inserts into lane `KU` on `lsm.s/inode_create`.
-2. Userspace relay thread pops from `KU` and pushes into lane `UK`.
-3. On shutdown (`Ctrl+C`), userspace triggers a uprobe-backed kernel consumer to drain `UK`.
+1. **Relay mode**: kernel producer inserts into lane `KU`, userspace relays to `UK`, and a uprobe-backed kernel consumer drains `UK` on shutdown.
+2. **One-way mode**: kernel producer inserts into lane `KU` and userspace consumes directly from `KU` (`-1` or `DS_ONE_WAY=1`).
+3. **Ringbuf baseline**: `skeleton_ringbuf` measures kernel->userspace delivery through `BPF_MAP_TYPE_RINGBUF` without arena-backed queues.
 
-All relay apps use the same control shape (`-v`, `-s`, `-h`) and print lane statistics.
+Arena apps use the same control shape (`-1`, `-v`, `-s`, `-h`). `skeleton_ringbuf` supports `-v`, `-s`, `-h`.
 
-## Implemented relay apps
+## Implemented apps
 
+Arena relay + one-way capable apps:
 - `skeleton_msqueue` -> `include/ds_msqueue.h`
 - `skeleton_vyukhov` -> `include/ds_vyukhov.h`
 - `skeleton_folly_spsc` -> `include/ds_folly_spsc.h`
@@ -23,6 +24,9 @@ All relay apps use the same control shape (`-v`, `-s`, `-h`) and print lane stat
 - `skeleton_io_uring` -> `include/ds_io_uring.h`
 - `skeleton_iouring_liburing` -> `include/ds_iouring_liburing.h`
 - `skeleton_kcov` -> `include/ds_kcov.h`
+
+Non-arena baseline:
+- `skeleton_ringbuf` -> `include/ringbuf_bench.h`
 
 ## Implemented Data Structures
 
@@ -56,6 +60,8 @@ Run as root because BPF load/attach requires privileges:
 
 ```bash
 sudo build/skeleton_msqueue -v
+DS_ONE_WAY=1 sudo build/skeleton_msqueue -v
+sudo build/skeleton_ringbuf -v
 ```
 
 While running, generate `inode_create` events:
@@ -68,20 +74,27 @@ Stop with `Ctrl+C` to trigger the uprobe consumer and print stats.
 
 ### Runtime options
 
-All `build/skeleton_*` binaries:
-- `-v` verify both lanes on exit
+Arena `build/skeleton_*` binaries:
+- `-1` one-way kernel->userspace mode
+- `-v` verify on exit
+- `-s` print statistics (enabled by default)
+- `-h` show usage
+
+`build/skeleton_ringbuf`:
+- `-v` verify metric counters on exit
 - `-s` print statistics (enabled by default)
 - `-h` show usage
 
 ## Performance Metrics
 
-All 8 skeleton relay programs automatically collect per-operation latency
-metrics. Measurements are stored in BPF Arena shared memory and printed as a
-statistics table on program exit.
+All arena skeleton programs automatically collect per-operation latency
+metrics in shared arena memory. `skeleton_ringbuf` uses a separate non-arena
+metrics store declared in BPF global data and reported with the same BENCH
+parseable format.
 
 ### Measurement categories
 
-Four categories match the relay lane model:
+Relay mode uses four operational categories plus a derived end-to-end value:
 
 | Category | Side | Description |
 |---|---|---|
@@ -122,9 +135,13 @@ On program exit, a table is printed per category:
 - Average latency (successful ops only)
 - Throughput (ops/sec)
 
+One-way arena mode uses `LKMM Producer`, `User Consumer`, and the actual
+`End-to-end` samples recorded in userspace. `skeleton_ringbuf` reports the same
+three categories through `include/ringbuf_bench.h`.
+
 ### Key API
 
-Header: `include/ds_metrics.h`
+Headers: `include/ds_metrics.h`, `include/ringbuf_bench.h`
 
 ```c
 // Time an operation block and record the sample.
@@ -154,7 +171,7 @@ The runner validates return codes and produced/consumed key-value consistency.
 ## Current documentation mismatches to be aware of
 
 - Legacy shell scripts in `scripts/test_*.sh` and `scripts/benchmark.sh` still refer to older flags (`-t`, `-o`, `-w`) and non-current binaries.
-- Some Makefile help text still references a `skeleton` target that is not part of the current app list.
+- `scripts/runner.py` remains relay-oriented; use `scripts/benchmarking.py --one-way` for arena-vs-ringbuf transport comparisons.
 - `ds_api.h` provides a generic template API; concrete `ds_*` headers in this repo use per-structure signatures where needed.
 
 Treat `scripts/usertests.py` and `build/skeleton_* --help` output as the source of truth for the current test flow.
@@ -187,3 +204,5 @@ To add a new relay implementation, mirror an existing `skeleton_*` pair:
 4. Register app names in `Makefile` (`BPF_APPS`, and optional `USERTEST_APPS`).
 
 Use existing files as templates (`skeleton_msqueue*`, `skeleton_vyukhov*`).
+For arena-independent kernel->userspace baselines, use `skeleton_ringbuf*` as
+a template instead of the relay apps.

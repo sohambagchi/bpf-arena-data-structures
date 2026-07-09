@@ -362,8 +362,13 @@ static inline __u64 ds_metrics_percentile(
 	return result;
 }
 
-/* Forward declaration so ds_metrics_print() can call the parseable emitter */
+/* Forward declarations so print helpers can call parseable emitters */
 static inline void ds_metrics_dump_parseable(
+	struct ds_metrics_store __arena *store,
+	const char *ds_name,
+	double elapsed_sec);
+
+static inline void ds_metrics_dump_parseable_oneway(
 	struct ds_metrics_store __arena *store,
 	const char *ds_name,
 	double elapsed_sec);
@@ -555,6 +560,113 @@ static inline void ds_metrics_print_extended(
 	       "========================\n");
 }
 
+/**
+ * ds_metrics_print_oneway - Print one-way transport metrics
+ * @store:   Arena pointer to the metrics store
+ * @ds_name: Human-readable name of the benchmarked transport
+ *
+ * Intended for kernel->userspace one-way benchmarks.  Uses the actual
+ * end-to-end samples recorded in the DS_METRICS_END_TO_END ring instead of
+ * deriving E2E from all four relay stages.
+ */
+static inline void ds_metrics_print_oneway(
+	struct ds_metrics_store __arena *store,
+	const char *ds_name)
+{
+	struct ds_metrics_ring __arena *prod_ring;
+	struct ds_metrics_ring __arena *user_ring;
+	struct ds_metrics_ring __arena *e2e_ring;
+	__u64 prod_total, prod_success, prod_lat_ok, prod_avg_ok, prod_p50, prod_p99;
+	__u64 user_total, user_success, user_lat_ok, user_avg_ok, user_p50, user_p99;
+	__u64 e2e_total, e2e_success, e2e_lat_ok, e2e_avg_ok, e2e_p50, e2e_p99;
+	__u64 prod_tput = 0, user_tput = 0, e2e_tput = 0;
+	double prod_rate, user_rate, e2e_rate;
+
+	if (!store || !ds_name)
+		return;
+
+	cast_kern(store);
+	prod_ring = &store->rings[DS_METRICS_LKMM_PRODUCER];
+	user_ring = &store->rings[DS_METRICS_USER_CONSUMER];
+	e2e_ring = &store->rings[DS_METRICS_END_TO_END];
+	cast_kern(prod_ring);
+	cast_kern(user_ring);
+	cast_kern(e2e_ring);
+
+	prod_total = prod_ring->count;
+	prod_success = prod_ring->success_count;
+	prod_lat_ok = prod_ring->success_latency_ns;
+	prod_avg_ok = (prod_success > 0) ? prod_lat_ok / prod_success : 0;
+	prod_p50 = ds_metrics_percentile(prod_ring, 50.0, 1);
+	prod_p99 = ds_metrics_percentile(prod_ring, 99.0, 1);
+	prod_rate = (prod_total > 0)
+		? (double)prod_success / (double)prod_total * 100.0 : 0.0;
+	if (prod_lat_ok > 0)
+		prod_tput = (__u64)((double)prod_success / ((double)prod_lat_ok / 1e9));
+
+	user_total = user_ring->count;
+	user_success = user_ring->success_count;
+	user_lat_ok = user_ring->success_latency_ns;
+	user_avg_ok = (user_success > 0) ? user_lat_ok / user_success : 0;
+	user_p50 = ds_metrics_percentile(user_ring, 50.0, 1);
+	user_p99 = ds_metrics_percentile(user_ring, 99.0, 1);
+	user_rate = (user_total > 0)
+		? (double)user_success / (double)user_total * 100.0 : 0.0;
+	if (user_lat_ok > 0)
+		user_tput = (__u64)((double)user_success / ((double)user_lat_ok / 1e9));
+
+	e2e_total = e2e_ring->count;
+	e2e_success = e2e_ring->success_count;
+	e2e_lat_ok = e2e_ring->success_latency_ns;
+	e2e_avg_ok = (e2e_success > 0) ? e2e_lat_ok / e2e_success : 0;
+	e2e_p50 = ds_metrics_percentile(e2e_ring, 50.0, 1);
+	e2e_p99 = ds_metrics_percentile(e2e_ring, 99.0, 1);
+	e2e_rate = (e2e_total > 0)
+		? (double)e2e_success / (double)e2e_total * 100.0 : 0.0;
+	if (e2e_lat_ok > 0)
+		e2e_tput = (__u64)((double)e2e_success / ((double)e2e_lat_ok / 1e9));
+
+	printf("============================================================"
+	       "========================\n");
+	printf("              PERFORMANCE METRICS (one-way): %s\n", ds_name);
+	printf("============================================================"
+	       "========================\n");
+	printf("%-18s %7s %9s %6s %9s %9s %9s %11s\n",
+	       "Category", "Total", "Success", "Rate%",
+	       "Avg(ns)", "p50(ns)", "p99(ns)", "Tput-OK");
+	printf("%-18s %7llu %9llu %5.1f%% %9llu %9llu %9llu %11llu\n",
+	       ds_metrics_category_names[DS_METRICS_LKMM_PRODUCER],
+	       (unsigned long long)prod_total,
+	       (unsigned long long)prod_success,
+	       prod_rate,
+	       (unsigned long long)prod_avg_ok,
+	       (unsigned long long)prod_p50,
+	       (unsigned long long)prod_p99,
+	       (unsigned long long)prod_tput);
+	printf("%-18s %7llu %9llu %5.1f%% %9llu %9llu %9llu %11llu\n",
+	       ds_metrics_category_names[DS_METRICS_USER_CONSUMER],
+	       (unsigned long long)user_total,
+	       (unsigned long long)user_success,
+	       user_rate,
+	       (unsigned long long)user_avg_ok,
+	       (unsigned long long)user_p50,
+	       (unsigned long long)user_p99,
+	       (unsigned long long)user_tput);
+	printf("%-18s %7llu %9llu %5.1f%% %9llu %9llu %9llu %11llu\n",
+	       ds_metrics_category_names[DS_METRICS_END_TO_END],
+	       (unsigned long long)e2e_total,
+	       (unsigned long long)e2e_success,
+	       e2e_rate,
+	       (unsigned long long)e2e_avg_ok,
+	       (unsigned long long)e2e_p50,
+	       (unsigned long long)e2e_p99,
+	       (unsigned long long)e2e_tput);
+	printf("============================================================"
+	       "========================\n");
+
+	ds_metrics_dump_parseable_oneway(store, ds_name, 0.0);
+}
+
 /* ========================================================================
  * MACHINE-PARSEABLE OUTPUT
  * ======================================================================== */
@@ -643,6 +755,95 @@ static inline void ds_metrics_dump_parseable(
 			       (unsigned long long)e2e_tput);
 		}
 	}
+
+	if (elapsed_sec > 0.0)
+		printf("BENCH_ELAPSED_SEC %.6f\n", elapsed_sec);
+
+	printf("BENCH_METRICS_END\n");
+}
+
+/**
+ * ds_metrics_dump_parseable_oneway - Emit one-way benchmark metrics
+ * @store:       Arena pointer to the metrics store
+ * @ds_name:     Benchmark name
+ * @elapsed_sec: Wall-clock seconds the workload ran (0 to omit)
+ */
+static inline void ds_metrics_dump_parseable_oneway(
+	struct ds_metrics_store __arena *store,
+	const char *ds_name,
+	double elapsed_sec)
+{
+	struct ds_metrics_ring __arena *prod_ring;
+	struct ds_metrics_ring __arena *user_ring;
+	struct ds_metrics_ring __arena *e2e_ring;
+	__u64 prod_total, prod_success, prod_lat_ok, prod_avg_ok, prod_p50, prod_p99;
+	__u64 user_total, user_success, user_lat_ok, user_avg_ok, user_p50, user_p99;
+	__u64 e2e_total, e2e_success, e2e_lat_ok, e2e_avg_ok, e2e_p50, e2e_p99;
+	__u64 prod_tput = 0, user_tput = 0, e2e_tput = 0;
+
+	if (!store || !ds_name)
+		return;
+
+	cast_kern(store);
+	prod_ring = &store->rings[DS_METRICS_LKMM_PRODUCER];
+	user_ring = &store->rings[DS_METRICS_USER_CONSUMER];
+	e2e_ring = &store->rings[DS_METRICS_END_TO_END];
+	cast_kern(prod_ring);
+	cast_kern(user_ring);
+	cast_kern(e2e_ring);
+
+	prod_total = prod_ring->count;
+	prod_success = prod_ring->success_count;
+	prod_lat_ok = prod_ring->success_latency_ns;
+	prod_avg_ok = (prod_success > 0) ? prod_lat_ok / prod_success : 0;
+	prod_p50 = ds_metrics_percentile(prod_ring, 50.0, 1);
+	prod_p99 = ds_metrics_percentile(prod_ring, 99.0, 1);
+	if (prod_lat_ok > 0)
+		prod_tput = (__u64)((double)prod_success / ((double)prod_lat_ok / 1e9));
+
+	user_total = user_ring->count;
+	user_success = user_ring->success_count;
+	user_lat_ok = user_ring->success_latency_ns;
+	user_avg_ok = (user_success > 0) ? user_lat_ok / user_success : 0;
+	user_p50 = ds_metrics_percentile(user_ring, 50.0, 1);
+	user_p99 = ds_metrics_percentile(user_ring, 99.0, 1);
+	if (user_lat_ok > 0)
+		user_tput = (__u64)((double)user_success / ((double)user_lat_ok / 1e9));
+
+	e2e_total = e2e_ring->count;
+	e2e_success = e2e_ring->success_count;
+	e2e_lat_ok = e2e_ring->success_latency_ns;
+	e2e_avg_ok = (e2e_success > 0) ? e2e_lat_ok / e2e_success : 0;
+	e2e_p50 = ds_metrics_percentile(e2e_ring, 50.0, 1);
+	e2e_p99 = ds_metrics_percentile(e2e_ring, 99.0, 1);
+	if (e2e_lat_ok > 0)
+		e2e_tput = (__u64)((double)e2e_success / ((double)e2e_lat_ok / 1e9));
+
+	printf("BENCH_METRICS_BEGIN %s\n", ds_name);
+	printf("BENCH %s total=%llu success=%llu avg_ns=%llu p50_ns=%llu p99_ns=%llu tput=%llu\n",
+	       ds_metrics_category_tags[DS_METRICS_LKMM_PRODUCER],
+	       (unsigned long long)prod_total,
+	       (unsigned long long)prod_success,
+	       (unsigned long long)prod_avg_ok,
+	       (unsigned long long)prod_p50,
+	       (unsigned long long)prod_p99,
+	       (unsigned long long)prod_tput);
+	printf("BENCH %s total=%llu success=%llu avg_ns=%llu p50_ns=%llu p99_ns=%llu tput=%llu\n",
+	       ds_metrics_category_tags[DS_METRICS_USER_CONSUMER],
+	       (unsigned long long)user_total,
+	       (unsigned long long)user_success,
+	       (unsigned long long)user_avg_ok,
+	       (unsigned long long)user_p50,
+	       (unsigned long long)user_p99,
+	       (unsigned long long)user_tput);
+	printf("BENCH %s total=%llu success=%llu avg_ns=%llu p50_ns=%llu p99_ns=%llu tput=%llu\n",
+	       ds_metrics_category_tags[DS_METRICS_END_TO_END],
+	       (unsigned long long)e2e_total,
+	       (unsigned long long)e2e_success,
+	       (unsigned long long)e2e_avg_ok,
+	       (unsigned long long)e2e_p50,
+	       (unsigned long long)e2e_p99,
+	       (unsigned long long)e2e_tput);
 
 	if (elapsed_sec > 0.0)
 		printf("BENCH_ELAPSED_SEC %.6f\n", elapsed_sec);
