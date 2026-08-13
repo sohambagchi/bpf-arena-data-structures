@@ -90,9 +90,57 @@ python3 scripts/usertests.py --list
 
 ## Requirements
 
-- Linux kernel 6.10+ with `CONFIG_BPF_ARENA=y`
+- Linux kernel 6.10+, configured per `kernel/configs/bpf-arena.config` (below)
 - Clang/LLVM with BPF target support (the Makefile defaults to `clang-20`, with fallback to `clang`)
 - `libelf`, `zlib`, `gcc`, `make`
 - root privileges for loading/attaching BPF programs
 
 For a fast setup path, see `QUICKSTART.md`.
+
+## Kernel configuration
+
+Check whether the running kernel already works:
+
+```bash
+python3 scripts/check_kconfig.py            # reads /boot/config-$(uname -r)
+python3 scripts/check_kconfig.py path/to/.config
+```
+
+It exits non-zero and names what is missing. To build a kernel that
+satisfies it, merge the fragment with the kernel's own tooling:
+
+```bash
+cd /path/to/linux
+./scripts/kconfig/merge_config.sh -m .config \
+    /path/to/bpf-arena-data-structures/kernel/configs/bpf-arena.config
+make olddefconfig
+```
+
+Or install the fragment into the kernel tree and use the built-in target:
+
+```bash
+cp kernel/configs/bpf-arena.config /path/to/linux/kernel/configs/
+cd /path/to/linux && make bpf-arena.config
+```
+
+Four things that are easy to get wrong:
+
+- **There is no `CONFIG_BPF_ARENA`.** Arena support follows from
+  `CONFIG_BPF_SYSCALL` on any 64-bit MMU arch — upstream
+  `kernel/bpf/Makefile` gates `arena.o` on `MMU && 64BIT` plus
+  `BPF_SYSCALL`. Earlier revisions of this README told you to look for a
+  menu entry that does not exist.
+- **`CONFIG_BPF_LSM=y` alone is not enough.** `CONFIG_LSM` must also list
+  `bpf`, otherwise the `lsm.s/inode_create` programs fail to attach at
+  runtime on a kernel that otherwise looks correct. Booting with
+  `lsm=<your list>,bpf` works without a rebuild.
+- **`CONFIG_DEBUG_INFO_BTF=y` is a runtime requirement, not just a build
+  one.** libbpf reads `/sys/kernel/btf/vmlinux` to attach the BTF-typed
+  programs, even though `third_party/vmlinux.h` is checked in.
+- **`CONFIG_KCOV` and `CONFIG_IO_URING` are optional.** The `kcov` and
+  `io_uring` skeletons are arena rings modeled on those subsystems'
+  designs; neither calls into the real subsystem. They are in the
+  fragment so one kernel can also host comparisons against the genuine
+  article. If you enable `CONFIG_KCOV` for that, leave
+  `CONFIG_KCOV_INSTRUMENT_ALL` off — it instruments every kernel function
+  and will skew the `ds_metrics` latency and throughput numbers.
