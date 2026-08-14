@@ -1,12 +1,23 @@
 #!/usr/bin/env python3
 """Check that a kernel .config can build and run the arena relay apps.
 
-Pure text analysis -- this never builds a kernel or runs an experiment.
+Text analysis of a .config, plus -- when the config being checked is the one
+the running kernel booted from -- a runtime check of the LSM list. This never
+builds a kernel, modifies a bootloader, or runs an experiment.
+
+The runtime check exists because CONFIG_LSM is not the last word: an `lsm=`
+kernel command line *replaces* that list outright, so a config containing
+"bpf" can still boot into a kernel where the BPF LSM is inactive and every
+lsm.s program fails to attach. The reverse also happens -- a command line can
+supply "bpf" that the config lacks. Only /sys/kernel/security/lsm knows.
 
 Usage:
     python3 scripts/check_kconfig.py [path/to/.config]
+    python3 scripts/check_kconfig.py --print-lsm-fix   # emit the lsm= line to set
 
 Defaults to /boot/config-$(uname -r), falling back to /proc/config.gz.
+Runtime checks run only for that auto-detected config (override with
+--runtime / --no-runtime).
 
 The companion file kernel/configs/bpf-arena.config sets only the
 user-settable symbols. This script additionally verifies the derived ones
@@ -26,6 +37,9 @@ import sys
 
 SET_RE = re.compile(r"^CONFIG_([A-Z0-9_]+)=(.*)$")
 UNSET_RE = re.compile(r"^# CONFIG_([A-Z0-9_]+) is not set$")
+
+RUNTIME_LSM_PATH = "/sys/kernel/security/lsm"
+CMDLINE_PATH = "/proc/cmdline"
 
 # (symbol, group, settable_by_fragment, why)
 REQUIRED = [
@@ -113,13 +127,111 @@ def default_config():
     return None
 
 
+def is_running_config(path):
+    """True if @path is the config the running kernel booted from.
+
+    Runtime probing is only meaningful then. build-kernel.sh checks a .config
+    inside a kernel tree, and `nix flake check` checks the reference config in
+    a sandbox; neither has anything to do with /sys/kernel/security/lsm.
+    """
+    default = default_config()
+    if not default:
+        return False
+    try:
+        return os.path.realpath(path) == os.path.realpath(default)
+    except OSError:
+        return False
+
+
+def split_lsm(value):
+    """Split an LSM list ("a,b,c") into entries, tolerating quotes and spaces."""
+    return [e.strip() for e in value.strip().strip('"').split(",") if e.strip()]
+
+
+def read_active_lsms():
+    """LSMs the running kernel actually activated, or None if unreadable.
+
+    Unreadable usually means securityfs is not mounted, which is not itself a
+    failure of the kernel config.
+    """
+    try:
+        with open(RUNTIME_LSM_PATH, errors="replace") as fh:
+            return split_lsm(fh.read())
+    except OSError:
+        return None
+
+
+def read_cmdline_lsm():
+    """The lsm= override from /proc/cmdline, or None if there is not one."""
+    try:
+        with open(CMDLINE_PATH, errors="replace") as fh:
+            cmdline = fh.read()
+    except OSError:
+        return None
+    for token in cmdline.split():
+        if token.startswith("lsm="):
+            return split_lsm(token[len("lsm="):])
+    return None
+
+
+def lsm_fix_value(config_lsm, cmdline_lsm):
+    """The lsm= value to set: whichever list is in effect, plus bpf.
+
+    Never a canned list. Because lsm= replaces rather than extends, emitting a
+    fixed string would silently disable whatever it omits -- AppArmor on
+    Ubuntu, SELinux on Fedora. Start from the list actually in effect: the
+    command line if one is pinned, otherwise the config's.
+    """
+    base = cmdline_lsm if cmdline_lsm is not None else (config_lsm or [])
+    return ",".join(base + ["bpf"]) if "bpf" not in base else ",".join(base)
+
+
+def print_lsm_fix(value, indent="  "):
+    """Print how to apply an lsm= value. Prints only -- never edits anything."""
+    pad = indent
+    print("%sSet this on the kernel command line. It replaces the built-in" % pad)
+    print("%slist, so it already includes everything you have now:" % pad)
+    print()
+    print("%s    lsm=%s" % (pad, value))
+    print()
+    print("%sFor one boot, to test: at the GRUB menu press 'e', append it to" % pad)
+    print("%sthe 'linux' line, then Ctrl-X. To make it permanent:" % pad)
+    print()
+    print("%s    Debian/Ubuntu  add to GRUB_CMDLINE_LINUX in /etc/default/grub," % pad)
+    print("%s                   then: sudo update-grub" % pad)
+    print("%s    Fedora/RHEL    sudo grubby --update-kernel=ALL \\" % pad)
+    print("%s                       --args='lsm=%s'" % (pad, value))
+    print("%s    systemd-boot   the 'options' line in /boot/loader/entries/*.conf" % pad)
+    print("%s    NixOS          boot.kernelParams in configuration.nix" % pad)
+    print()
+    print("%sThen reboot and re-run this script. ('capability' and 'ima' may" % pad)
+    print("%sappear in the active list without being on the command line.)" % pad)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("config", nargs="?", help="path to a .config (or config.gz)")
     ap.add_argument("-q", "--quiet", action="store_true",
                     help="print only failures")
+    ap.add_argument("--runtime", dest="runtime", action="store_true", default=None,
+                    help="force the runtime LSM check on")
+    ap.add_argument("--no-runtime", dest="runtime", action="store_false",
+                    help="skip the runtime LSM check (config text only)")
+    ap.add_argument("--print-lsm-fix", action="store_true",
+                    help="print the lsm= line this machine needs, and exit")
     args = ap.parse_args()
+
+    if args.print_lsm_fix:
+        path = args.config or default_config()
+        config_lsms = split_lsm(load(path)[0].get("LSM", "")) if path else []
+        active = read_active_lsms()
+        if active is not None and "bpf" in active:
+            print("The BPF LSM is already active (%s: %s); nothing to set."
+                  % (RUNTIME_LSM_PATH, ",".join(active)))
+            return 0
+        print_lsm_fix(lsm_fix_value(config_lsms, read_cmdline_lsm()), indent="")
+        return 0
 
     path = args.config or default_config()
     if not path:
@@ -132,7 +244,11 @@ def main():
     if not values:
         sys.exit("error: %s contains no CONFIG_ lines" % path)
 
-    print("Checking %s (%d set, %d unset)\n" % (path, len(values), len(unset)))
+    runtime = args.runtime if args.runtime is not None else is_running_config(path)
+
+    print("Checking %s (%d set, %d unset)%s\n"
+          % (path, len(values), len(unset),
+             "" if runtime else "  [config text only]"))
 
     failures = []
     current_group = None
@@ -153,15 +269,52 @@ def main():
 
     # CONFIG_LSM is a string, not a bool: it must list "bpf".
     lsm = values.get("LSM", "").strip('"')
-    lsm_ok = "bpf" in [e.strip() for e in lsm.split(",")]
-    if not lsm_ok:
-        failures.append(("LSM", '="%s"' % lsm, True,
-                         'must list "bpf" or lsm.s programs cannot attach'))
+    config_lsms = split_lsm(lsm)
+    config_lsm_ok = "bpf" in config_lsms
+
+    # Runtime state, when this is the config the running kernel booted from.
+    # It overrides the text check in both directions: an lsm= command line can
+    # take "bpf" away that the config has, or supply one the config lacks.
+    active = read_active_lsms() if runtime else None
+    cmdline_lsms = read_cmdline_lsm() if runtime else None
+    lsm_fix = None
+
+    if active is None:
+        lsm_ok = config_lsm_ok
+        if not lsm_ok:
+            failures.append(("LSM", '="%s"' % lsm, True,
+                             'must list "bpf" or lsm.s programs cannot attach'))
+    else:
+        lsm_ok = "bpf" in active
+        if not lsm_ok:
+            lsm_fix = lsm_fix_value(config_lsms, cmdline_lsms)
+            # settable=None: neither a fragment symbol nor a derived one --
+            # it has its own remediation block below.
+            failures.append(("LSM", "not active at runtime", None,
+                             'the running kernel did not activate the BPF LSM'))
+
     if not args.quiet or not lsm_ok:
         print("  LSM ordering")
+        # When runtime state is known it is authoritative, so a config that
+        # lacks "bpf" is informational (--) rather than a failure (!!).
+        config_mark = "ok" if config_lsm_ok else ("--" if lsm_ok else "!!")
         print("    [%s] CONFIG_LSM contains \"bpf\"%s"
-              % ("ok" if lsm_ok else "!!",
-                 "" if lsm_ok else "  (found: %r)" % lsm))
+              % (config_mark,
+                 "" if config_lsm_ok else "  (found: %r)" % lsm))
+        if active is not None:
+            print("    [%s] %s contains \"bpf\"  (active: %s)"
+                  % ("ok" if lsm_ok else "!!", RUNTIME_LSM_PATH, ",".join(active)))
+            if cmdline_lsms is not None:
+                print("         lsm=%s on the kernel command line overrides "
+                      "CONFIG_LSM" % ",".join(cmdline_lsms))
+            if lsm_ok and not config_lsm_ok:
+                print("         (the command line supplies what the config "
+                      "does not -- this works)")
+        elif runtime:
+            print("    [--] %s unreadable; runtime LSM state unverified"
+                  % RUNTIME_LSM_PATH)
+            print("         (securityfs not mounted? "
+                  "sudo mount -t securityfs none /sys/kernel/security)")
         print()
 
     for sym, why in MUST_BE_OFF:
@@ -192,8 +345,8 @@ def main():
 
     if failures:
         print("FAIL: %d requirement(s) unmet\n" % len(failures))
-        frag = [f for f in failures if f[2]]
-        derived = [f for f in failures if not f[2]]
+        frag = [f for f in failures if f[2] is True]
+        derived = [f for f in failures if f[2] is False]
         if frag:
             print("  Set via kernel/configs/bpf-arena.config:")
             for sym, state, _, _ in frag:
@@ -204,6 +357,11 @@ def main():
             print("  rather than editing them directly:")
             for sym, state, _, why in derived:
                 print("    CONFIG_%s (%s) -- %s" % (sym, state, why))
+        if lsm_fix:
+            # A boot-time problem, not a build-time one: no rebuild required.
+            print("\n  The BPF LSM is compiled in but was not activated at boot.")
+            print("  This needs no kernel rebuild -- only a command line change:\n")
+            print_lsm_fix(lsm_fix)
         return 1
 
     print("OK: all requirements met")

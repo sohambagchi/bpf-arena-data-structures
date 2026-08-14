@@ -124,11 +124,25 @@ def normalize_app(arg: str) -> str:
 	return p.name if p.name else arg
 
 
+def resolve_app(app: str) -> Path:
+	"""Locate a usertest binary.
+
+	The Makefile installs into OUT_DIR (default `build`), so look there first
+	and fall back to the repo root for in-tree builds.
+	"""
+	root = repo_root()
+	out_dir = os.environ.get("OUT_DIR", "build")
+	candidates = [root / out_dir / app, root / app]
+	for cand in candidates:
+		if cand.exists():
+			return cand
+	tried = " or ".join(str(c) for c in candidates)
+	raise FileNotFoundError(f"missing executable: {tried} (run `make usertest`)")
+
+
 def run_one(app: str, *, timeout_sec: int, verbose: bool) -> tuple[int, str]:
 	root = repo_root()
-	exe = root / app
-	if not exe.exists():
-		raise FileNotFoundError(f"missing executable: {exe} (run `make usertest`)")
+	exe = resolve_app(app)
 
 	cmd = [str(exe)]
 	env = os.environ.copy()
