@@ -1,0 +1,21 @@
+# Build artifacts -- rebuilt inside the image, and stale host objects linked
+# against the host's libelf would poison the container build.
+.output/
+build/
+*.o
+*.skel.h
+**/__pycache__/
+
+# Nix outputs
+result
+result-*
+
+# VCS metadata: third_party/ submodule *contents* are needed, .git is not.
+.git/
+.gitmodules
+
+# Editor/OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store

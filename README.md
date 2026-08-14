@@ -88,6 +88,46 @@ python3 scripts/usertests.py --list
 - Shell scripts in `scripts/test_*.sh` and `scripts/benchmark.sh` are legacy templates and still mention older CLI flags (`-t`, `-o`, `-w`).
 - The reliable automated test entrypoint today is `scripts/usertests.py`.
 
+## Reproducible environments
+
+Two packaged environments cover the toolchain. Neither replaces the kernel
+requirement below except where noted.
+
+### Nix (`flake.nix`)
+
+```bash
+nix develop                  # clang-20, gcc, libelf, zlib, openssl, python3
+make                         # builds into build/
+
+nix build .#artifact         # same 14 binaries, hermetically
+nix build .#kernel           # Linux 6.18 from kernel/configs/full-6.18.2-bpf.config
+nix run .#vm                 # boot that kernel in QEMU, repo mounted at /repo
+nix flake check              # builds the artifact + validates the reference .config
+```
+
+`nix run .#vm` is the only environment here that gives you the paper's kernel at
+runtime: it builds `full-6.18.2-bpf.config` against the 6.18 source, boots it
+under QEMU with `lsm=...,bpf` on the command line, and drops you at a root shell
+with the toolchain on PATH. `nix develop .#kernel` adds bison/flex/bc/pahole/QEMU
+for building a kernel by hand.
+
+Needs Nix >= 2.27 with flakes enabled (`inputs.self.submodules` pulls in
+`third_party/`), and `git submodule update --init --recursive` beforehand.
+
+### Docker (`Dockerfile`)
+
+```bash
+docker build -t bpf-arena-ds .
+docker run --rm -it -v "$PWD:/artifact" bpf-arena-ds   # build + userspace tests
+```
+
+A container shares the host's kernel, so the BPF half only works if the *host*
+already passes `scripts/check_kconfig.py`, and then only with
+`--privileged --pid=host -v /sys/kernel/debug:/sys/kernel/debug`. To get a 6.18
+kernel out of the Docker path you have to build and boot one: the image ships
+`build-kernel`, which fetches the source, applies either config, and prints the
+QEMU invocation. See the header comment in `Dockerfile` for the details.
+
 ## Requirements
 
 - Linux kernel 6.10+, configured per `kernel/configs/bpf-arena.config` (below)
