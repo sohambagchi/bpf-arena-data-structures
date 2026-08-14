@@ -164,13 +164,16 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Reference kernel for the paper's numbers. ae.tex: "The reference kernel is
-# 6.18.2; its complete .config is included". Override at build or run time.
-ENV KERNEL_VERSION=6.18.2
-ENV KERNEL_SRC=/usr/src/linux
-
-COPY docker/build-kernel.sh /usr/local/bin/build-kernel
-RUN chmod +x /usr/local/bin/build-kernel
+# Kernel builds happen through the repo's own scripts/build-kernel.sh, which is
+# on the mounted volume rather than baked into the image -- one implementation,
+# and reviewers get whatever version their checkout has:
+#
+#   docker run --rm -it --device /dev/kvm -v "$PWD:/artifact" bpf-arena-ds \
+#     ./scripts/build-kernel.sh --no-install
+#
+# --no-install is not optional here. A container cannot install a kernel for
+# itself: 'make install' would write into the image's /boot, which nothing
+# boots from. Build here, then boot the bzImage under QEMU.
 
 WORKDIR /artifact
 

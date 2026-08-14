@@ -66,7 +66,10 @@ else
 fi
 
 STEP_N=0
-step()  { STEP_N=$((STEP_N + 1)); printf '\n%s==> [%d/7] %s%s\n' "$C_BLU" "$STEP_N" "$*" "$C_OFF"; }
+# Set once the flags are parsed: 7 with the install step, 6 without. A fixed
+# denominator would end a --no-install run at "[6/7]", which reads as a failure.
+TOTAL_STEPS=7
+step()  { STEP_N=$((STEP_N + 1)); printf '\n%s==> [%d/%d] %s%s\n' "$C_BLU" "$STEP_N" "$TOTAL_STEPS" "$*" "$C_OFF"; }
 info()  { printf '    %s\n' "$*"; }
 warn()  { printf '%swarning:%s %s\n' "$C_YEL" "$C_OFF" "$*" >&2; }
 ok()    { printf '%s    ok:%s %s\n' "$C_GRN" "$C_OFF" "$*"; }
@@ -136,6 +139,8 @@ case "$BASE" in
         "  running    this machine's current config, then append the fragment" \
         "  full       the paper's reference 6.18.2 .config, used verbatim" ;;
 esac
+
+((DO_INSTALL)) || TOTAL_STEPS=6
 
 TARBALL="${WORKDIR}/linux-${KERNEL_VERSION}.tar.xz"
 SRCDIR="${WORKDIR}/linux-${KERNEL_VERSION}"

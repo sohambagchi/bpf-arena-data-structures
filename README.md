@@ -124,9 +124,35 @@ docker run --rm -it -v "$PWD:/artifact" bpf-arena-ds   # build + userspace tests
 A container shares the host's kernel, so the BPF half only works if the *host*
 already passes `scripts/check_kconfig.py`, and then only with
 `--privileged --pid=host -v /sys/kernel/debug:/sys/kernel/debug`. To get a 6.18
-kernel out of the Docker path you have to build and boot one: the image ships
-`build-kernel`, which fetches the source, applies either config, and prints the
-QEMU invocation. See the header comment in `Dockerfile` for the details.
+kernel out of the Docker path you have to build one and boot it under QEMU —
+run `./scripts/build-kernel.sh --no-install` inside the container. See the
+header comment in `Dockerfile` for the details.
+
+### Building a kernel directly (`scripts/build-kernel.sh`)
+
+One command: download Linux 6.18.44 from cdn.kernel.org, verify its SHA-256,
+configure it with this repo's BPF fragment, build it, and install it.
+
+```bash
+./scripts/build-kernel.sh                 # defconfig + BPF fragment, then install
+./scripts/build-kernel.sh --base running  # start from THIS machine's config
+./scripts/build-kernel.sh --base full     # the paper's reference .config, verbatim
+./scripts/build-kernel.sh --no-install    # build only; nothing outside the tree
+./scripts/build-kernel.sh -y              # skip the confirmation prompt
+```
+
+It checks every dependency up front and names the missing package for
+apt/dnf/pacman, verifies the `.config` with `check_kconfig.py` *before* the
+20–60 minute compile, and installs as `6.18.44-bpf-arena` so nothing already
+on the system is overwritten. Every failure exits with a documented code; the
+table is at the top of the script.
+
+If you intend to boot the result on real hardware, prefer `--base running`.
+`defconfig` is generic and may omit the storage or filesystem drivers your root
+device needs, in which case the new kernel will not boot (your existing one
+still will).
+
+On NixOS this script refuses to install — use `nix build .#kernel` instead.
 
 ## Requirements
 

@@ -3,6 +3,7 @@ Runner script for BPF arena data structure executables.
 Spawns concurrent processes on separate cores to stress test during execution.
 """
 
+import csv
 import os
 import subprocess
 import multiprocessing
@@ -12,12 +13,19 @@ import threading
 import re
 from collections import Counter
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional
 
 
 TRACE_PIPE_PATH = "/sys/kernel/debug/tracing/trace_pipe"
 TRACE_CLEAR_PATH = "/sys/kernel/debug/tracing/trace"
 TRACE_CONSUME_RE = re.compile(r"consume key=(\d+) value=(\d+)")
+
+# Emitted by ds_metrics_print() (include/ds_metrics.h) when each relay exits.
+METRICS_HEADER_RE = re.compile(r"PERFORMANCE METRICS:\s*(.+?)\s*$")
+METRICS_ROW_RE = re.compile(
+    r"^(LKMM producer|User consumer|User producer|LKMM consumer)\s+"
+    r"(\d+)\s+(\d+)\s+([\d.]+)%\s+(\d+)\s+(\d+)\s+(\d+)\s*$"
+)
 
 
 def find_executables() -> List[str]:
@@ -69,6 +77,22 @@ def touch_file_worker(file_id: int, core_id: int, ready_event, start_event, stop
             os.remove(filename)
     except:
         pass
+
+
+def stream_reader(pipe, sink: List[str], echo: bool):
+    """Drain a subprocess pipe into a list, optionally echoing it live."""
+    try:
+        for line in iter(pipe.readline, ''):
+            sink.append(line)
+            if echo:
+                print(line, end='')
+    except Exception as e:
+        print(f"Warning: output reader failed: {e}")
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
 
 
 def clear_trace_buffer():
@@ -144,6 +168,173 @@ def validate_trace_output(trace_log_path: Path, executable: str, produced_touch_
     return True
 
 
+def parse_metrics(stdout_text: str) -> Optional[Dict]:
+    """Extract the ds_metrics_print() table from an executable's stdout.
+
+    Every relay prints the same four-row table on exit (SIGTERM included, since
+    print_stats defaults to true).  Each row carries the successful op count and
+    the average latency of those successful ops, so the summed successful
+    latency is recoverable as success * avg_ok.
+
+    Returns None when no table was captured (e.g. the process had to be killed
+    before it could flush its statistics).
+    """
+    ds_name = None
+    categories = {}
+
+    for line in stdout_text.splitlines():
+        header = METRICS_HEADER_RE.search(line)
+        if header:
+            ds_name = header.group(1)
+            continue
+
+        row = METRICS_ROW_RE.match(line.strip())
+        if not row:
+            continue
+
+        success = int(row.group(3))
+        avg_ok_ns = int(row.group(6))
+        categories[row.group(1)] = {
+            'total': int(row.group(2)),
+            'success': success,
+            'avg_ns': int(row.group(5)),
+            'avg_ok_ns': avg_ok_ns,
+            'throughput': int(row.group(7)),
+            # ds_metrics_print() reports avg_ok = success_latency_ns / success,
+            # so this reconstructs the summed latency (modulo integer division).
+            'success_latency_ns': success * avg_ok_ns,
+        }
+
+    if not categories:
+        return None
+
+    success_ops = sum(cat['success'] for cat in categories.values())
+    success_latency_ns = sum(cat['success_latency_ns'] for cat in categories.values())
+
+    # Aggregate throughput over all relay stages: successful ops per second of
+    # time actually spent inside the data structure.
+    ops_per_sec = (
+        success_ops / (success_latency_ns / 1e9) if success_latency_ns > 0 else 0.0
+    )
+
+    # Cost of moving one item through every stage that did useful work.
+    e2e_latency_ns = sum(
+        cat['avg_ok_ns'] for cat in categories.values() if cat['success'] > 0
+    )
+
+    return {
+        'ds_name': ds_name,
+        'categories': categories,
+        'success_ops': success_ops,
+        'success_latency_ns': success_latency_ns,
+        'ops_per_sec': ops_per_sec,
+        'e2e_latency_ns': e2e_latency_ns,
+    }
+
+
+def export_metrics_csv(results: List[Dict], output_dir: Path = Path('build')) -> Optional[Path]:
+    """Write the raw per-category metric numbers to a timestamped CSV file.
+
+    One row per (data structure, relay stage), plus an 'ALL' row per data
+    structure holding the aggregate figures used for ranking.  Values are the
+    absolute numbers reported by ds_metrics_print(), not derived percentages.
+    """
+    timestamp = time.strftime('%Y%m%d-%H%M%S')
+    output_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = output_dir / f"runner_metrics_{timestamp}.csv"
+
+    columns = [
+        'timestamp', 'executable', 'ds_name', 'category',
+        'total_ops', 'success_ops', 'avg_latency_ns', 'avg_success_latency_ns',
+        'success_latency_ns', 'throughput_ops_per_sec', 'e2e_latency_ns',
+        'return_code', 'trace_validation_ok', 'wall_elapsed_s', 'workers',
+    ]
+
+    try:
+        with csv_path.open('w', newline='', encoding='utf-8') as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(columns)
+
+            for result in results:
+                common = [
+                    timestamp,
+                    result['executable'],
+                    result['ds_name'],
+                ]
+                tail = [
+                    result['return_code'],
+                    int(bool(result['trace_validation_ok'])),
+                    f"{result['elapsed_time']:.3f}",
+                    result['total_workers'],
+                ]
+
+                metrics = result.get('metrics')
+                if not metrics:
+                    writer.writerow(common + ['NO_METRICS'] + [''] * 7 + tail)
+                    continue
+
+                for category, values in metrics['categories'].items():
+                    writer.writerow(common + [
+                        category,
+                        values['total'],
+                        values['success'],
+                        values['avg_ns'],
+                        values['avg_ok_ns'],
+                        values['success_latency_ns'],
+                        values['throughput'],
+                        '',
+                    ] + tail)
+
+                writer.writerow(common + [
+                    'ALL',
+                    sum(v['total'] for v in metrics['categories'].values()),
+                    metrics['success_ops'],
+                    '',
+                    '',
+                    metrics['success_latency_ns'],
+                    f"{metrics['ops_per_sec']:.3f}",
+                    metrics['e2e_latency_ns'],
+                ] + tail)
+    except Exception as e:
+        print(f"Warning: could not write metrics CSV {csv_path}: {e}")
+        return None
+
+    return csv_path
+
+
+def print_performance_ranking(results: List[Dict]):
+    """Print data structure names in ascending performance order (slowest first)."""
+    print(f"\n{'='*60}")
+    print("PERFORMANCE RANKING (slowest first)")
+    print(f"{'='*60}")
+    print("Ranked by aggregate successful ops/sec across all four relay stages")
+    print("(LKMM producer, user consumer, user producer, LKMM consumer).\n")
+
+    ranked = [r for r in results if r.get('metrics')]
+    unranked = [r for r in results if not r.get('metrics')]
+
+    if not ranked:
+        print("No performance metrics captured for any data structure.")
+    else:
+        ranked.sort(key=lambda r: r['metrics']['ops_per_sec'])
+
+        print(f"{'#':>2}  {'Data structure':<20} {'Ops/sec':>14} "
+              f"{'End-to-end(ns)':>15} {'Ops-OK':>10}")
+        for position, result in enumerate(ranked, start=1):
+            metrics = result['metrics']
+            print(f"{position:>2}. {result['ds_name']:<20} "
+                  f"{metrics['ops_per_sec']:>14,.0f} "
+                  f"{metrics['e2e_latency_ns']:>15,} "
+                  f"{metrics['success_ops']:>10,}")
+
+        print("\nAscending performance order (slowest first):")
+        print("  " + " < ".join(r['ds_name'] for r in ranked))
+
+    if unranked:
+        print("\nNo metrics captured (excluded from ranking): "
+              + ", ".join(r['ds_name'] for r in unranked))
+
+
 def run_executable_with_concurrent_touches(executable: str, duration: int = 10, show_output: bool = False):
     """
     Run executable with concurrent file touches on separate cores.
@@ -195,13 +386,32 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
 
     # Start the executable
     start_time = time.time()
+    # Always capture stdout/stderr so the exit-time metrics table can be parsed;
+    # with --show-output the reader threads echo it live as well.
     exe_process = subprocess.Popen(
         [f'./{executable}'],
-        stdout=None if show_output else subprocess.PIPE,
-        stderr=None if show_output else subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True
     )
-    
+
+    stdout_lines: List[str] = []
+    stderr_lines: List[str] = []
+    output_threads = [
+        threading.Thread(
+            target=stream_reader,
+            args=(exe_process.stdout, stdout_lines, show_output),
+            daemon=True,
+        ),
+        threading.Thread(
+            target=stream_reader,
+            args=(exe_process.stderr, stderr_lines, show_output),
+            daemon=True,
+        ),
+    ]
+    for thread in output_threads:
+        thread.start()
+
     # Signal all workers to start creating files
     start_event.set()
     print(f"Signaled all workers to start creating files continuously")
@@ -209,14 +419,21 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
     # Let it run for the specified duration
     time.sleep(duration)
     
-    # Terminate the executable (it runs forever otherwise)
+    # Terminate the executable (it runs forever otherwise).  SIGTERM is the
+    # graceful path: each skeleton drains its relay and prints its metrics table.
     exe_process.terminate()
     try:
-        stdout, stderr = exe_process.communicate(timeout=2)
+        exe_process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         exe_process.kill()
-        stdout, stderr = exe_process.communicate()
-    
+        exe_process.wait()
+
+    for thread in output_threads:
+        thread.join(timeout=2)
+
+    stdout = ''.join(stdout_lines)
+    stderr = ''.join(stderr_lines)
+
     end_time = time.time()
     
     # Signal workers to stop
@@ -237,11 +454,20 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
     print(f"  Return code: {exe_process.returncode}")
     print(f"  Elapsed time: {elapsed:.2f} seconds")
     
-    if stdout:
-        print(f"  STDOUT:\n{stdout}")
-    if stderr:
-        print(f"  STDERR:\n{stderr}")
-    
+    if not show_output:
+        # Already echoed live by the reader threads when show_output is set.
+        if stdout:
+            print(f"  STDOUT:\n{stdout}")
+        if stderr:
+            print(f"  STDERR:\n{stderr}")
+
+    metrics = parse_metrics(stdout)
+    if metrics:
+        print(f"  Aggregate throughput: {metrics['ops_per_sec']:,.0f} ops/sec "
+              f"over {metrics['success_ops']:,} successful ops")
+    else:
+        print("  Warning: no performance metrics table captured")
+
     # Clean up any remaining temp files
     cleaned_count = 0
     for i in range(nproc):
@@ -258,10 +484,13 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
     
     return {
         'executable': executable,
+        'ds_name': (metrics or {}).get('ds_name')
+        or os.path.basename(executable).replace('skeleton_', ''),
         'return_code': exe_process.returncode,
         'elapsed_time': elapsed,
         'total_workers': nproc,
         'trace_validation_ok': trace_validation_ok,
+        'metrics': metrics,
     }
 
 
@@ -277,6 +506,11 @@ def main():
         "--show-output",
         action="store_true",
         help="Stream executable stdout/stderr live to the terminal",
+    )
+    parser.add_argument(
+        "--csv-dir",
+        default="build",
+        help="Directory for the timestamped raw-metrics CSV (default: build)",
     )
     args = parser.parse_args()
 
@@ -323,7 +557,13 @@ def main():
         print(f"  Trace match: {'Yes' if result['trace_validation_ok'] else 'No'}")
         print(f"  Time: {result['elapsed_time']:.2f}s")
         print(f"  Workers: {result['total_workers']}")
-    
+
+    csv_path = export_metrics_csv(results, Path(args.csv_dir))
+    if csv_path:
+        print(f"\nRaw metrics CSV: {csv_path}")
+
+    print_performance_ranking(results)
+
     return 0
 
 
