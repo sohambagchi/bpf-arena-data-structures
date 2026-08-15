@@ -297,8 +297,10 @@ def main() -> int:
     commands: Dict[str, List[str]] = {
         "kconfig": [python, "scripts/check_kconfig.py"]
                    + ([args.config] if args.config else []),
+        # A bare -j is unbounded; on a many-core box that spawns as many
+        # compiles as there are targets ready. Default to one job per CPU.
         "build": [make or "make", args.make_target,
-                  f"-j{args.jobs}" if args.jobs else "-j"],
+                  f"-j{args.jobs or os.cpu_count() or 4}"],
         "usertests": [python, "scripts/usertests.py", "--keep-going"]
                      + (["--timeout", str(args.usertest_timeout)]
                         if args.usertest_timeout else []),

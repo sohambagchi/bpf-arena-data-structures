@@ -536,7 +536,7 @@ ${C_GRN}Build complete.${C_OFF} Nothing outside the source tree was modified.
   config   ${SRCDIR}/.config
 
 To install it later:
-  cd '${SRCDIR}' && sudo make modules_install install
+  cd '${SRCDIR}' && sudo make -j\$(nproc) modules_install && sudo make install
 EOF
     exit 0
 fi
@@ -548,12 +548,12 @@ if [[ "$(id -u)" -ne 0 ]]; then
     command -v sudo >/dev/null 2>&1 || die 10 "not root, and sudo is not available" \
         "Re-run this script as root, or install only the build with --no-install" \
         "and do the install step yourself:" \
-        "  cd '${SRCDIR}' && make modules_install install"
+        "  cd '${SRCDIR}' && make -j\$(nproc) modules_install && make install"
     SUDO="sudo"
     info "requesting sudo for modules_install and install"
 fi
 
-$SUDO make modules_install || die 10 "'make modules_install' failed" \
+$SUDO make -j"$JOBS" modules_install || die 10 "'make modules_install' failed" \
     "Target: /lib/modules/${KERNEL_VERSION}${LOCALVERSION}/" \
     "" \
     "Common causes: /lib/modules on a full or read-only filesystem." \

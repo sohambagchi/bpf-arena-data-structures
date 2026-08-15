@@ -91,7 +91,7 @@ want when booting the result on real hardware. Other flags:
 - `--base full` — the paper's reference `.config`
   (`kernel/configs/full-6.18.2-bpf.config`), verbatim.
 - `--base defconfig` (default) — generic x86.
-- `-y` — skip the confirmation prompt. `-j N` — parallelism.
+- `-y` — skip the confirmation prompt. `-j N` — parallelism (default: `nproc`).
   `--no-install` — build only, touch nothing outside the tree.
 
 It checks every dependency up front, names the missing package for
@@ -139,7 +139,7 @@ OK: all requirements met
 
 ========================================================================
 STAGE: build
-$ make all -j
+$ make all -j<nproc>
 ========================================================================
   ...
 Build complete! Built applications:
