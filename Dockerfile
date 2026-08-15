@@ -93,6 +93,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libelf-dev \
         zlib1g-dev \
         libssl-dev \
+        # Not needed by `make` -- the bootstrap bpftool links neither. They are
+        # what a *full* bpftool out of third_party/bpftool feature-tests for,
+        # and it drops the dependent features silently when they are absent:
+        # binutils-dev (libbfd + libopcodes) for `prog dump jited`, libcap-dev
+        # for the capability half of `feature probe`. Both are the first thing
+        # you reach for when a relay will not load.
+        binutils-dev \
+        libcap-dev \
         # scripts/usertests.py, scripts/runner.py, scripts/check_kconfig.py.
         # networkx is for the sibling `calculus` artifact's calculus.py; it is
         # unused here but costs nothing and lets one image serve both.

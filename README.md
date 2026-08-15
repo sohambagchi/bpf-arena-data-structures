@@ -50,7 +50,7 @@ Anything that does not go to plan is covered in the [FAQ](#faq) at the end.
 ### Step 1 — Initialize the environment
 
 Both environments provide the toolchain (clang-20, gcc, libelf, zlib, libbpf,
-python3). Pick one:
+libbfd, libcap, python3). Pick one:
 
 ```bash
 git submodule update --init --recursive   # required by both
@@ -284,8 +284,8 @@ Two packaged environments cover the toolchain.
 
 ```bash
 nix develop                  # one shell: clang-20, gcc, libelf, zlib, openssl,
-                             # python3, plus bison/flex/bc/pahole/QEMU for the
-                             # kernel step
+                             # libbfd/libopcodes, libcap, python3, plus
+                             # bison/flex/bc/pahole/QEMU for the kernel step
 
 make                         # builds into build/
 
@@ -327,9 +327,66 @@ the system is overwritten, and the existing kernel remains bootable.
 - Linux kernel 6.10+, configured per `kernel/configs/delta-bpf-arena.config` (below)
 - Clang/LLVM with BPF target support (the Makefile defaults to `clang-20`, with fallback to `clang`)
 - `libelf`, `zlib`, `gcc`, `make`
+- `libbfd` (plus `libopcodes`) and `libcap` — not needed by `make`, needed for a
+  full `bpftool`; see [below](#libbfd-and-libcap)
 - root privileges for loading/attaching BPF programs
 
 For a fast setup path, see `QUICKSTART.md`.
+
+### Installing them by hand
+
+`nix develop` and the Docker image already carry all of this. To install on the
+host instead:
+
+| | Debian/Ubuntu | Fedora/RHEL | Arch |
+| --- | --- | --- | --- |
+| libelf | `libelf-dev` | `elfutils-libelf-devel` | `libelf` |
+| zlib | `zlib1g-dev` | `zlib-devel` | `zlib` |
+| OpenSSL | `libssl-dev` | `openssl-devel` | `openssl` |
+| libbfd + libopcodes | `binutils-dev` | `binutils-devel` | `binutils` |
+| libcap | `libcap-dev` | `libcap-devel` | `libcap` |
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install -y build-essential pkg-config \
+    libelf-dev zlib1g-dev libssl-dev binutils-dev libcap-dev
+
+# Fedora/RHEL
+sudo dnf install -y gcc make pkgconf-pkg-config \
+    elfutils-libelf-devel zlib-devel openssl-devel binutils-devel libcap-devel
+
+# Arch
+sudo pacman -S --needed base-devel pkgconf \
+    libelf zlib openssl binutils libcap
+```
+
+Arch ships `bfd.h` and `sys/capability.h` in the runtime packages; Debian and
+Fedora split them into the `-dev`/`-devel` packages above.
+
+`scripts/build-kernel.sh` checks its own dependencies before it starts and names
+the missing package for apt/dnf/pacman, so the kernel step needs no list kept in
+sync with this one.
+
+#### libbfd and libcap
+
+Neither is needed to run `make`. This repo's Makefile builds `bpftool bootstrap`
+— the minimal host build used only to emit skeletons — and that links neither.
+They matter when you build the *full* `bpftool` from `third_party/bpftool`.
+Upstream's Makefile feature-tests both and, when they are absent, drops the
+dependent features silently rather than failing the build, so the result is a
+`bpftool` quietly missing:
+
+- `bpftool prog dump jited` — JIT disassembly, from `libbfd` and `libopcodes`
+- the capability half of `bpftool feature probe` — from `libcap`
+
+Those two are the usual first stop when a program loads on one machine and not
+another, which is why both packaged environments carry them rather than leaving
+them to be discovered mid-debug. `libcap` also brings `setcap`, if you would
+rather grant a relay `CAP_BPF`/`CAP_PERFMON` than run it as root.
+
+Note that `bfd.h` refuses to be included on its own — `#error config.h must be
+included before this header`. bpftool's own `-DPACKAGE='"bpftool"'` satisfies
+that guard; anything else including it directly has to define `PACKAGE` too.
 
 ## Kernel configuration
 

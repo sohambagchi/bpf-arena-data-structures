@@ -41,6 +41,28 @@
         (python3.withPackages (ps: [ ps.networkx ])) # runner.py/usertests.py + calculus
       ];
 
+      # Not needed by `make`. The Makefile builds `bpftool bootstrap`, which
+      # links neither of these; they are what the *full* bpftool out of
+      # third_party/bpftool wants. Upstream's Makefile feature-tests both and,
+      # if they are missing, drops the features silently rather than failing:
+      #
+      #   libbfd (+ libopcodes)  ->  `bpftool prog dump jited` disassembly
+      #   libcap                 ->  the capability half of `bpftool feature`
+      #
+      # Both of those are the first things you reach for when a relay will not
+      # load, so they belong in the shell and in the VM rather than being
+      # discovered missing halfway through debugging. libcap's default output
+      # also carries setcap/getcap/capsh.
+      #
+      # No extra CFLAGS are needed here: bfd.h guards itself with `#error
+      # config.h must be included before this header`, and bpftool's own
+      # -DPACKAGE='"bpftool"' is what satisfies that guard.
+      bpftoolFullTools = pkgs: with pkgs; [
+        libbfd
+        libopcodes
+        libcap
+      ];
+
       # Everything needed to build a kernel from kernel/configs/*.config by
       # hand, inside the shell or the container. pahole is not optional:
       # CONFIG_DEBUG_INFO_BTF=y fails the build without it.
@@ -117,7 +139,7 @@
         # because it is a booted machine rather than a set of tools.
         default = pkgs.mkShell {
           name = "bpf-arena-ds";
-          packages = artifactTools pkgs ++ kernelTools pkgs;
+          packages = artifactTools pkgs ++ kernelTools pkgs ++ bpftoolFullTools pkgs;
 
           # nixpkgs' cc-wrapper injects hardening flags that the BPF backend
           # rejects outright: -fzero-call-used-regs=used-gpr is an error for
@@ -157,6 +179,7 @@
             echo "  gcc   : $(gcc  --version | head -n1)"
             echo "  python: $(python3 --version)"
             echo "  kernel: bison flex bc pahole qemu on PATH"
+            echo "  libs  : libbfd/libopcodes + libcap (full bpftool: jited dump, feature probe)"
             echo
             echo "  build : git submodule update --init --recursive && make"
             echo "  test  : python3 scripts/usertests.py --build"
@@ -270,8 +293,14 @@
             ];
 
             # ---- guest environment -----------------------------------------
+            # bpftoolFullTools is here for the same reason as in the devShell,
+            # and it is worth more inside the guest: nixpkgs' `bpftools` is
+            # already built against libbfd/libcap, so `bpftool prog dump jited`
+            # and `bpftool feature probe` work out of the box, and setcap is on
+            # hand if you would rather grant CAP_BPF than run a relay as root.
             environment.systemPackages =
-              artifactTools pkgs ++ (with pkgs; [ bpftools strace trace-cmd ]);
+              artifactTools pkgs ++ bpftoolFullTools pkgs
+              ++ (with pkgs; [ bpftools strace trace-cmd ]);
 
             # systemd mounts debugfs at /sys/kernel/debug on its own, which is
             # where scripts/runner.py reads trace_pipe from.
