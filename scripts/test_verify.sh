@@ -1,16 +1,4 @@
 #!/bin/bash
-# Correctness verification test for BPF Arena Data Structure Framework
-# Tests data structure integrity and consistency
-#
-# NOTE: This script is a TEMPLATE for a multi-threaded implementation.
-# The current skeleton implementation uses a simpler design:
-# - Kernel: LSM hook inserts on file creation
-# - Userspace: Single-threaded reader (sleeps, then reads)
-# 
-# Command-line options like -t, -o, -w are for future multi-threaded versions.
-# To test the current implementation, use:
-#   sudo ./skeleton -d 5 -v
-#   sudo ./skeleton_msqueue -d 5 -v
 
 set -e
 
@@ -19,13 +7,11 @@ echo "  BPF Arena Framework - Verification Test"
 echo "=========================================="
 echo ""
 
-# Check if running as root
 if [ "$EUID" -ne 0 ]; then
     echo "ERROR: This script must be run as root (use sudo)"
     exit 1
 fi
 
-# Check if program exists
 if [ ! -f "./skeleton" ]; then
     echo "ERROR: skeleton program not found. Run 'make' first."
     exit 1
@@ -34,7 +20,6 @@ fi
 TESTS_PASSED=0
 TESTS_FAILED=0
 
-# Function to run a test with verification
 run_verify_test() {
     local test_name="$1"
     shift
@@ -44,11 +29,9 @@ run_verify_test() {
     echo "  Command: $cmd"
     
     if $cmd > /tmp/verify_output.txt 2>&1; then
-        # Check if verification passed
         if grep -q "verification PASSED" /tmp/verify_output.txt; then
             echo "  ✓ PASSED - Verification successful"
             
-            # Show element count
             grep "Elements in list" /tmp/verify_output.txt || true
             echo ""
             

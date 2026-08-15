@@ -22,7 +22,10 @@ git submodule update --init --recursive
 make
 ```
 
-Binaries are placed in `build/`.
+Binaries are placed in `build/`. Build as your normal user — never under
+`sudo`, which resets the environment and takes the dev shell's compiler
+settings with it (`make` then fails on `libelf.h: No such file or directory`).
+Everything below that needs root needs it only to *run* what this step built.
 
 ## 3) Run one relay app
 
@@ -60,6 +63,17 @@ Optional:
 python3 scripts/usertests.py --list
 python3 scripts/usertests.py --keep-going
 ```
+
+## 6) Run the whole pipeline
+
+```bash
+sudo python3 scripts/run_all.py
+```
+
+Kernel-config check, userspace tests, then the eight relays with a ranking and
+a metrics CSV. It runs the binaries from step 2 and compiles nothing; if they
+are missing it says so up front and names each one. `README.md` has the full
+walkthrough.
 
 ## Current state caveats
 

@@ -4,9 +4,18 @@
 Runs, in order:
 
     1. kconfig    python3 scripts/check_kconfig.py   -- kernel supports the relays
-    2. build      make                               -- BPF skeletons + usertests
-    3. usertests  python3 scripts/usertests.py       -- userspace DS correctness
-    4. runner     python3 scripts/runner.py          -- eight relays + ranking + CSV
+    2. usertests  python3 scripts/usertests.py       -- userspace DS correctness
+    3. runner     python3 scripts/runner.py          -- eight relays + ranking + CSV
+
+Building is deliberately *not* one of them.  `make` is an explicit step you run
+first, as your normal user; this script only runs what it left in build/ and
+fails up front if those binaries are missing.  The reason is sudo, which the
+runner stage needs: sudo resets the environment, so a build launched through it
+loses the dev shell's compiler settings -- inside `nix develop` that is
+NIX_CFLAGS_COMPILE and PKG_CONFIG_PATH, without which the very same `make`
+fails on "libelf.h: No such file or directory".  It would also leave root-owned
+objects in build/ and .output/ that the next unprivileged `make` cannot
+overwrite.
 
 Each stage runs as a subprocess with its output streamed live and captured, so
 a failure can be reported loudly (banner + output tail + hint) instead of
@@ -16,10 +25,10 @@ makes the relays unattachable, and a failing usertest makes their numbers
 meaningless.
 
 Usage:
-    python3 scripts/run_all.py                     # full pipeline
-    sudo python3 scripts/run_all.py                # relays need root
+    make                                           # separate, unprivileged step
+    sudo python3 scripts/run_all.py                # full pipeline; relays need root
     python3 scripts/run_all.py --only usertests    # one stage
-    python3 scripts/run_all.py --skip kconfig --skip build
+    python3 scripts/run_all.py --skip kconfig
     python3 scripts/run_all.py --keep-going        # run everything, report at end
 
 Exit status: 0 if every executed stage passed, 1 otherwise.
@@ -29,7 +38,7 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
+import re
 import subprocess
 import sys
 import threading
@@ -37,25 +46,24 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-STAGES = ["kconfig", "build", "usertests", "runner"]
+STAGES = ["kconfig", "usertests", "runner"]
+
+STAGE_BINARIES = {
+    "usertests": "USERTEST_APPS",
+    "runner": "BPF_APPS",
+}
 
 BANNER_WIDTH = 72
 
-# Shown when a stage fails -- the actionable next step, not a restatement.
 STAGE_HINTS = {
     "kconfig": (
         "This kernel cannot run the arena relays.\n"
-        "  - Apply kernel/configs/bpf-arena.config and rebuild, or boot a kernel\n"
-        "    that already satisfies it; the report above lists each unmet symbol.\n"
+        "  - Apply kernel/configs/delta-bpf-arena.config and rebuild, or boot a\n"
+        "    kernel that already satisfies it; the report above lists each\n"
+        "    unmet symbol.\n"
         "  - To check a different config: "
         "python3 scripts/run_all.py --config path/to/.config\n"
-        "  - Stages 2-4 can still be run against a compliant kernel later."
-    ),
-    "build": (
-        "The build did not produce the binaries.\n"
-        "  - Needs clang-20 (or set CLANG=clang) with BPF arena support.\n"
-        "  - libbpf/bpftool are submodules: git submodule update --init --recursive\n"
-        "  - Re-run just this stage verbosely: make V=1"
+        "  - The later stages can still be run against a compliant kernel later."
     ),
     "usertests": (
         "A userspace data structure test failed -- the relay measurements would\n"
@@ -189,8 +197,66 @@ def newest_csv_files(csv_dir: Path, before: set) -> List[Path]:
     return sorted(after - before)
 
 
+def makefile_apps(root: Path, variable: str) -> List[str]:
+    """The app names on one `VAR = a b c` line of the Makefile, in order."""
+    try:
+        text = (root / "Makefile").read_text(encoding="utf-8")
+    except OSError:
+        return []
+    match = re.search(rf"^{variable}\s*=\s*(.+?)\s*$", text, flags=re.MULTILINE)
+    return match.group(1).split() if match else []
+
+
+def check_binaries(stages: List[str], root: Path) -> bool:
+    """Fail before the first stage if `make` has not been run.
+
+    Building is a separate step on purpose (see the module docstring), so the
+    binaries either exist or the pipeline has nothing to run.  Saying so here,
+    naming every missing one at once, beats letting usertests.py find an empty
+    build/ and runner.py then report "No executables found!".
+    """
+    missing: List[str] = []
+    for stage in stages:
+        variable = STAGE_BINARIES.get(stage)
+        if not variable:
+            continue
+        for app in makefile_apps(root, variable):
+            binary = root / "build" / app
+            if not (binary.is_file() and os.access(binary, os.X_OK)):
+                missing.append(f"build/{app}  ({stage})")
+
+    if not missing:
+        return True
+
+    lines = ["ERROR: the binaries are not built", "",
+             "run_all.py builds nothing; it runs what `make` leaves in build/.",
+             "", "Missing:"]
+    lines += [f"  {entry}" for entry in missing]
+    lines += [
+        "",
+        "Build first, as your normal user -- not under sudo:",
+        "",
+        "  make",
+        "  sudo python3 scripts/run_all.py",
+        "",
+        "sudo resets the environment, so a build started through it loses the",
+        "dev shell's compiler settings: inside `nix develop` that is",
+        "NIX_CFLAGS_COMPILE and PKG_CONFIG_PATH, and the compile then fails on",
+        '"libelf.h: No such file or directory" even though the same `make`',
+        "succeeds as your normal user.  It also leaves root-owned objects that",
+        "the next unprivileged `make` cannot overwrite.",
+        "",
+        "If `make` itself is what failed:",
+        "  - libbpf/bpftool are submodules: git submodule update --init --recursive",
+        "  - needs clang-20 (or set CLANG=clang) with BPF arena support",
+        "  - re-run it verbosely: make V=1",
+    ]
+    print(banner(lines), file=sys.stderr, flush=True)
+    return False
+
+
 def check_privileges(stages: List[str]) -> None:
-    """Warn early -- before a long build -- if the relay stage will not work."""
+    """Warn up front -- before the earlier stages run -- if the relay stage will not work."""
     if "runner" not in stages:
         return
     if hasattr(os, "geteuid") and os.geteuid() == 0:
@@ -231,7 +297,6 @@ def print_summary(results: List[Dict], csv_files: List[Path]) -> None:
                       f"All {len(results)} stage(s) completed successfully."], char="="))
         return
 
-    # Repeat the failures at the very bottom so they survive a long scrollback.
     lines = [f"PIPELINE FAILED: {len(failed)} of {len(results)} stage(s)", ""]
     for result in failed:
         lines.append(f"{result['stage']:<12} exit {result['return_code']}  "
@@ -243,7 +308,9 @@ def print_summary(results: List[Dict], csv_files: List[Path]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run the full artifact pipeline: kconfig -> build -> usertests -> runner",
+        description="Run the artifact pipeline: kconfig -> usertests -> runner. "
+                    "Build first with `make`; this script runs the binaries "
+                    "that leaves in build/.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--only", choices=STAGES, action="append", default=None,
@@ -258,10 +325,6 @@ def main() -> int:
     parser.add_argument("--config", default=None,
                         help="kconfig stage: path to a .config "
                              "(default: /boot/config-$(uname -r))")
-    parser.add_argument("-j", "--jobs", default=None,
-                        help="build stage: make parallelism (default: nproc)")
-    parser.add_argument("--make-target", default="all",
-                        help="build stage: make target (default: all)")
     parser.add_argument("--usertest-timeout", type=int, default=None,
                         help="usertests stage: per-test timeout in seconds")
     parser.add_argument("--csv-dir", default="build",
@@ -284,23 +347,12 @@ def main() -> int:
         print("error: every stage was skipped; nothing to do", file=sys.stderr)
         return 1
 
-    make = shutil.which("make")
-    if "build" in stages and not make and not args.dry_run:
-        print(banner(["ERROR: 'make' not found on PATH",
-                      "",
-                      "The build stage cannot run. Enter the dev shell first",
-                      "(nix develop, or the docker image), or skip the stage with",
-                      "--skip build if the binaries are already built."]),
-              file=sys.stderr)
+    if not args.dry_run and not check_binaries(stages, root):
         return 1
 
     commands: Dict[str, List[str]] = {
         "kconfig": [python, "scripts/check_kconfig.py"]
                    + ([args.config] if args.config else []),
-        # A bare -j is unbounded; on a many-core box that spawns as many
-        # compiles as there are targets ready. Default to one job per CPU.
-        "build": [make or "make", args.make_target,
-                  f"-j{args.jobs or os.cpu_count() or 4}"],
         "usertests": [python, "scripts/usertests.py", "--keep-going"]
                      + (["--timeout", str(args.usertest_timeout)]
                         if args.usertest_timeout else []),

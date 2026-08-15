@@ -1,16 +1,4 @@
 #!/bin/bash
-# Basic smoke test for BPF Arena Data Structure Framework
-# Tests basic functionality with minimal operations
-#
-# NOTE: This script is a TEMPLATE for a multi-threaded implementation.
-# The current skeleton implementation uses a simpler design:
-# - Kernel: LSM hook inserts on file creation
-# - Userspace: Single-threaded reader (sleeps, then reads)
-# 
-# Command-line options like -t, -o, -w are for future multi-threaded versions.
-# To test the current implementation, use:
-#   sudo ./skeleton -d 5
-#   sudo ./skeleton_msqueue -d 5
 
 set -e
 
@@ -19,13 +7,11 @@ echo "  BPF Arena Framework - Smoke Test"
 echo "=========================================="
 echo ""
 
-# Check if running as root
 if [ "$EUID" -ne 0 ]; then
     echo "ERROR: This script must be run as root (use sudo)"
     exit 1
 fi
 
-# Check if programs exist
 if [ ! -f "./skeleton" ]; then
     echo "ERROR: skeleton program not found. Run 'make' first."
     exit 1
@@ -39,7 +25,6 @@ fi
 TESTS_PASSED=0
 TESTS_FAILED=0
 
-# Function to run a test
 run_test() {
     local test_name="$1"
     shift

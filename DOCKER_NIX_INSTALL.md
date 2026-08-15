@@ -128,7 +128,7 @@ artifact, libbfd/libopcodes and libcap for a full `bpftool` build (see
 `README.md`, *Requirements → libbfd and libcap*, for what a bpftool built
 without them silently loses), and bison/flex/bc/pahole/QEMU for
 `scripts/build-kernel.sh`. Inside
-it, `README.md` steps 2 and 4 work as written. (`nix develop .#kernel` still
+it, `README.md` steps 2, 4 and 5 work as written. (`nix develop .#kernel` still
 resolves, as an alias for the default shell.) The QEMU guest is separate —
 `nix run .#vm` — because it is a booted machine rather than a set of tools.
 

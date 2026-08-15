@@ -40,10 +40,11 @@ Six of the eight have a userspace-only counterpart:
 - `build/usertest_ck_ring_spsc`
 - `build/usertest_ck_stack_upmc`
 
-## Running the artifact: four steps
+## Running the artifact: five steps
 
-Steps 1–3 prepare the machine; step 4 is the experiment. Step 2 takes 20–60
-minutes and needs ~22 GB free, and step 3 reboots the machine.
+Steps 1–3 prepare the machine, step 4 builds the binaries, step 5 is the
+experiment. Step 2 takes 20–60 minutes and needs ~22 GB free, and step 3
+reboots the machine.
 
 Anything that does not go to plan is covered in the [FAQ](#faq) at the end.
 
@@ -107,15 +108,35 @@ uname -r                        # 6.18.44-bpf-arena
 cat /sys/kernel/security/lsm    # must contain 'bpf'
 ```
 
-### Step 4 — Run the pipeline
+### Step 4 — Build
 
-One endpoint runs kernel-config check, build, userspace tests, and the relay
-experiment in order. It needs root: the relays load BPF programs and read
-`trace_pipe`.
+Inside the environment from step 1, as your normal user:
+
+```bash
+make                         # 14 binaries into build/
+```
+
+This is a step of its own, not part of the pipeline below, and it must not be
+run under `sudo`. `sudo` resets the environment, so a build launched through it
+loses the dev shell's compiler settings — inside `nix develop` that means
+`NIX_CFLAGS_COMPILE` and `PKG_CONFIG_PATH`, and the compile then fails with
+`libelf.h: No such file or directory` even though the same `make` succeeds as
+your normal user. It also leaves root-owned objects in `build/` and `.output/`
+that the next unprivileged `make` cannot overwrite (recover with
+`sudo make clean`).
+
+### Step 5 — Run the pipeline
+
+One endpoint runs the kernel-config check, the userspace tests, and the relay
+experiment in order, against the binaries step 4 produced. It needs root: the
+relays load BPF programs and read `trace_pipe`.
 
 ```bash
 sudo python3 scripts/run_all.py
 ```
+
+It builds nothing, and stops up front — naming each missing binary — if step 4
+has not been run.
 
 Expected output, abridged (the ops/sec figures below are illustrative
 formatting, not measurements from any particular machine — absolute numbers and
@@ -126,7 +147,7 @@ the resulting order vary by hardware):
 BPF Arena Data Structures -- full pipeline
 ========================================================================
 Repo root : /path/to/bpf-arena-data-structures
-Stages    : kconfig -> build -> usertests -> runner
+Stages    : kconfig -> usertests -> runner
 On failure: stop
 
 ========================================================================
@@ -136,15 +157,6 @@ $ python3 scripts/check_kconfig.py
 Checking /boot/config-6.18.44-bpf-arena (2431 set, 1210 unset)
   ...
 OK: all requirements met
-
-========================================================================
-STAGE: build
-$ make all -j<nproc>
-========================================================================
-  ...
-Build complete! Built applications:
-  - build/skeleton_msqueue
-  ...
 
 ========================================================================
 STAGE: usertests
@@ -192,7 +204,6 @@ Ascending performance order (slowest first):
 PIPELINE SUMMARY
 ========================================================================
   [PASS] kconfig          0.1s
-  [PASS] build           47.9s
   [PASS] usertests       38.3s
   [PASS] runner          92.4s
 
@@ -202,7 +213,7 @@ PIPELINE SUMMARY
 ========================================================================
 ==  PIPELINE PASSED
 ==
-==  All 4 stage(s) completed successfully.
+==  All 3 stage(s) completed successfully.
 ========================================================================
 ```
 
@@ -218,7 +229,7 @@ Useful variations:
 ```bash
 python3 scripts/run_all.py --dry-run            # print the stage commands only
 python3 scripts/run_all.py --only usertests     # one stage (repeatable)
-python3 scripts/run_all.py --skip kconfig --skip build
+python3 scripts/run_all.py --skip kconfig
 python3 scripts/run_all.py --keep-going         # run every stage, report at end
 sudo python3 scripts/run_all.py --csv-dir results --show-output
 sudo python3 scripts/run_all.py skeleton_msqueue skeleton_ck_ring_spsc
@@ -247,8 +258,8 @@ All `build/skeleton_*` relay binaries support:
 
 ## Build and test
 
-`scripts/run_all.py` (step 4 above) wraps all of these. To drive the individual
-stages by hand:
+`scripts/run_all.py` (step 5 above) wraps everything except the build. To drive
+the individual stages by hand:
 
 ```bash
 # Build everything into build/
@@ -300,9 +311,16 @@ included — there is no separate kernel shell to remember (`.#kernel` still
 resolves, as an alias for the default). The one thing kept out of it is
 `nix run .#vm`, which is a booted machine rather than a set of tools: it builds
 `full-6.18.2-bpf.config` against the 6.18 source, boots it under QEMU with
-`lsm=...,bpf` on the command line, and drops you at a root shell with the
-toolchain on PATH. That is the only environment here that gives you the paper's
-kernel at runtime.
+`lsm=...,bpf` on the command line, and drops you at a root shell with your
+checkout at `/repo`. That is the only environment here that gives you the
+paper's kernel at runtime.
+
+Run `make` on the host, in `nix develop`, before booting it. The guest shares
+the host's Nix store and mounts the repo, so `build/` is already populated and
+its binaries run there; but a NixOS system environment installs no `-dev`
+outputs, so building *inside* the guest fails on `libelf.h` the same way a
+build under `sudo` does. Inside the VM, run
+`cd /repo && python3 scripts/run_all.py` (already root).
 
 Needs Nix >= 2.27 with flakes enabled (`inputs.self.submodules` pulls in
 `third_party/`), and `git submodule update --init --recursive` beforehand. If
@@ -314,8 +332,14 @@ Nix is not installed yet, or `nix develop` fails with "experimental Nix feature
 
 ```bash
 docker build -t bpf-arena-ds .
-docker run --rm -it -v "$PWD:/artifact" bpf-arena-ds   # build + userspace tests
+docker run --rm -it -v "$PWD:/artifact" bpf-arena-ds   # shell with the toolchain
 ```
+
+The image's `CMD` is a shell, not the pipeline: run `make` and then
+`python3 scripts/run_all.py` inside it (already root, so no `sudo`). Only the
+userspace half is meaningful there — a container shares the host's kernel, so
+the relays run only if the *host* satisfies `check_kconfig.py`; see the
+[FAQ](#why-does-the-bpf-half-not-work-under-docker).
 
 ### Building a kernel directly (`scripts/build-kernel.sh`)
 
@@ -427,6 +451,43 @@ python3 scripts/check_kconfig.py
 ```
 
 If it prints `OK: all requirements met`, go straight to step 4.
+
+### `make` fails on `libelf.h: No such file or directory`
+
+Almost always because the build ran under `sudo`. `sudo` resets the environment
+(`env_reset`), and the dev shell carries its compiler settings in environment
+variables rather than in the compiler binary:
+
+- inside `nix develop`, `NIX_CFLAGS_COMPILE` is what puts elfutils' and zlib's
+  `include/` on the search path, and `PKG_CONFIG_PATH` is what lets libbpf's
+  `pkg-config --cflags libelf zlib` find them. `sudo` drops both. `PATH`
+  usually survives, so `make`, `gcc` and `clang` are still the dev shell's —
+  which is why the build starts normally and then dies on the first
+  `#include <libelf.h>`.
+- the same shape of failure applies to `CLANG_BPF_SYS_INCLUDES` (set by the
+  flake's `shellHook`) and to `CC`/`CLANG`.
+
+Build as your normal user (step 4) and let `sudo` apply only to the pipeline
+(step 5), which needs it. `sudo python3 scripts/run_all.py` no longer builds
+anything, so this cannot recur through it.
+
+If a root build already happened, `build/` and `.output/` hold root-owned
+objects that an unprivileged `make` cannot overwrite:
+
+```bash
+sudo make clean
+make
+```
+
+`sudo -E make` is not the fix: whether `-E` is even permitted depends on the
+sudoers policy, and it preserves the variables while still running the compiler
+as root, so you get the root-owned objects anyway.
+
+The same error, without `sudo`, means the headers are genuinely absent: you are
+outside `nix develop`, or inside the `nix run .#vm` guest, whose system
+environment installs no `-dev` outputs. Build on the host and run the binaries
+in the guest — the store is shared, so they run there unchanged. The Docker
+image is unaffected; `libelf-dev` is installed in it the ordinary way.
 
 ### `bpf` is missing from `/sys/kernel/security/lsm`
 
@@ -563,4 +624,5 @@ actually detected, read from `USERTEST_APPS` in the Makefile.
 - Shell scripts in `scripts/test_*.sh` and `scripts/benchmark.sh` are legacy
   templates and still mention older CLI flags (`-t`, `-o`, `-w`).
 - The automated entrypoint today is `scripts/run_all.py`, which orchestrates
-  `check_kconfig.py`, `make`, `usertests.py`, and `runner.py`.
+  `check_kconfig.py`, `usertests.py`, and `runner.py`. `make` is a separate
+  step you run first, unprivileged.

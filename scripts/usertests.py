@@ -119,7 +119,6 @@ def multiset_eq(a: Iterable[tuple[int, int]], b: Iterable[tuple[int, int]]) -> b
 
 
 def normalize_app(arg: str) -> str:
-	# allow passing "./usertest_mpsc" or "usertest_mpsc"
 	p = Path(arg)
 	return p.name if p.name else arg
 
@@ -182,7 +181,7 @@ def main(argv: list[str]) -> int:
 
 	root = repo_root()
 	if args.build:
-		r = subprocess.run(["make", "usertest", "-j"], cwd=str(root))
+		r = subprocess.run(["make", "usertest"], cwd=str(root))
 		if r.returncode != 0:
 			return r.returncode
 
@@ -219,7 +218,6 @@ def main(argv: list[str]) -> int:
 			if parsed.done_produced != parsed.done_consumed:
 				ok = False
 
-		# Validate produced/consumed KV pairs when the runner printed them.
 		if parsed.produced_pairs:
 			if not parsed.consumed_pairs:
 				ok = False

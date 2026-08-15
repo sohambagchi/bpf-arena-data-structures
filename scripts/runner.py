@@ -20,7 +20,6 @@ TRACE_PIPE_PATH = "/sys/kernel/debug/tracing/trace_pipe"
 TRACE_CLEAR_PATH = "/sys/kernel/debug/tracing/trace"
 TRACE_CONSUME_RE = re.compile(r"consume key=(\d+) value=(\d+)")
 
-# Emitted by ds_metrics_print() (include/ds_metrics.h) when each relay exits.
 METRICS_HEADER_RE = re.compile(r"PERFORMANCE METRICS:\s*(.+?)\s*$")
 METRICS_ROW_RE = re.compile(
     r"^(LKMM producer|User consumer|User producer|LKMM consumer)\s+"
@@ -43,35 +42,28 @@ def find_executables() -> List[str]:
 
 def touch_file_worker(file_id: int, core_id: int, ready_event, start_event, stop_event, touch_pids):
     """Worker process that continuously creates/deletes files on a specific core."""
-    # Set CPU affinity to run on specific core
     try:
         os.sched_setaffinity(0, {core_id})
     except Exception as e:
         print(f"Warning: Could not set CPU affinity for worker {file_id}: {e}")
     
-    # Signal ready and wait for start
     ready_event.set()
     start_event.wait()
     
-    # Continuously create and delete files until stop signal
     filename = f"file{file_id}.tmp"
     count = 0
     while not stop_event.is_set():
         try:
-            # Create new file (triggers inode_create) via subprocess (fork/exec)
             touch_process = subprocess.Popen(['touch', filename])
             touch_pids.append(touch_process.pid)
             touch_process.wait()
             count += 1
-            # Small sleep to avoid overwhelming the system
             time.sleep(0.01)
-            # Remove file to allow recreation
             if os.path.exists(filename):
                 os.remove(filename)
         except Exception as e:
-            pass  # Continue even if individual operations fail
+            pass
     
-    # Final cleanup
     try:
         if os.path.exists(filename):
             os.remove(filename)
@@ -109,9 +101,6 @@ def trace_pipe_reader(output_path: Path, stop_event: threading.Event):
     trace_process = None
     with output_path.open('w', encoding='utf-8') as output_file:
         try:
-            # The runner itself is required to run as root.  Do not wrap cat
-            # in sudo: terminating sudo leaves its cat child orphaned, holding
-            # trace_pipe open and silently stealing all later trace output.
             trace_process = subprocess.Popen(
                 ['cat', TRACE_PIPE_PATH],
                 stdout=output_file,
@@ -165,9 +154,6 @@ def validate_trace_output(trace_log_path: Path, executable: str, produced_touch_
         print("  Trace validation FAILED: consumer output contained no touch worker PIDs")
         return False
 
-    # inode_create is a system-wide LSM hook.  Daemons can legitimately create
-    # files while the test is attached, so unrelated PIDs are ambient input,
-    # not queue corruption.  Report them, but validate the worker-PID subset.
     ambient_counter = consumed_counter - expected_counter
     ambient_total = sum(ambient_counter.values())
     suffix = f" (ignored {ambient_total} ambient system event(s))" if ambient_total else ""
@@ -211,8 +197,6 @@ def parse_metrics(stdout_text: str) -> Optional[Dict]:
             'avg_ns': int(row.group(5)),
             'avg_ok_ns': avg_ok_ns,
             'throughput': int(row.group(7)),
-            # ds_metrics_print() reports avg_ok = success_latency_ns / success,
-            # so this reconstructs the summed latency (modulo integer division).
             'success_latency_ns': success * avg_ok_ns,
         }
 
@@ -222,13 +206,10 @@ def parse_metrics(stdout_text: str) -> Optional[Dict]:
     success_ops = sum(cat['success'] for cat in categories.values())
     success_latency_ns = sum(cat['success_latency_ns'] for cat in categories.values())
 
-    # Aggregate throughput over all relay stages: successful ops per second of
-    # time actually spent inside the data structure.
     ops_per_sec = (
         success_ops / (success_latency_ns / 1e9) if success_latency_ns > 0 else 0.0
     )
 
-    # Cost of moving one item through every stage that did useful work.
     e2e_latency_ns = sum(
         cat['avg_ok_ns'] for cat in categories.values() if cat['success'] > 0
     )
@@ -354,24 +335,21 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
         executable: Path to the executable to run
         duration: Duration in seconds to run the test (program will be terminated after this)
     """
-    # nproc = multiprocessing.cpu_count()
     nproc = 1
     print(f"\n{'='*60}")
     print(f"Running: {executable} for {duration} seconds")
     print(f"Spawning {nproc} concurrent touch processes on separate cores")
     print(f"{'='*60}")
     
-    # Create synchronization events
     manager = multiprocessing.Manager()
     start_event = manager.Event()
     stop_event = manager.Event()
     ready_events = [manager.Event() for _ in range(nproc)]
     touch_pids = manager.list()
     
-    # Spawn worker processes
     processes = []
     for i in range(nproc):
-        core_id = i % nproc  # Distribute across available cores
+        core_id = i % nproc
         p = multiprocessing.Process(
             target=touch_file_worker,
             args=(i, core_id, ready_events[i], start_event, stop_event, touch_pids)
@@ -379,7 +357,6 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
         p.start()
         processes.append(p)
     
-    # Wait for all workers to be ready
     for event in ready_events:
         event.wait()
     
@@ -395,10 +372,7 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
     )
     trace_thread.start()
 
-    # Start the executable
     start_time = time.time()
-    # Always capture stdout/stderr so the exit-time metrics table can be parsed;
-    # with --show-output the reader threads echo it live as well.
     exe_process = subprocess.Popen(
         [f'./{executable}'],
         stdout=subprocess.PIPE,
@@ -423,15 +397,11 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
     for thread in output_threads:
         thread.start()
 
-    # Signal all workers to start creating files
     start_event.set()
     print(f"Signaled all workers to start creating files continuously")
     
-    # Let it run for the specified duration
     time.sleep(duration)
     
-    # Terminate the executable (it runs forever otherwise).  SIGTERM is the
-    # graceful path: each skeleton drains its relay and prints its metrics table.
     exe_process.terminate()
     try:
         exe_process.wait(timeout=5)
@@ -447,26 +417,21 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
 
     end_time = time.time()
     
-    # Signal workers to stop
     stop_event.set()
     
-    # Wait for all worker processes to complete
     for p in processes:
         p.join(timeout=2)
 
-    # Stop trace capture and validate trace output against initial input PIDs
     trace_stop_event.set()
     trace_thread.join(timeout=3)
     trace_validation_ok = validate_trace_output(trace_log_path, executable, list(touch_pids))
     
-    # Results
     elapsed = end_time - start_time
     print(f"\nResults for {executable}:")
     print(f"  Return code: {exe_process.returncode}")
     print(f"  Elapsed time: {elapsed:.2f} seconds")
     
     if not show_output:
-        # Already echoed live by the reader threads when show_output is set.
         if stdout:
             print(f"  STDOUT:\n{stdout}")
         if stderr:
@@ -479,7 +444,6 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
     else:
         print("  Warning: no performance metrics table captured")
 
-    # Clean up any remaining temp files
     cleaned_count = 0
     for i in range(nproc):
         filename = f"file{i}.tmp"
@@ -528,7 +492,6 @@ def main():
     print("BPF Arena Data Structures Test Runner")
     print("=" * 60)
     
-    # Find executables
     executables = find_executables()
     
     if not executables:
@@ -538,7 +501,6 @@ def main():
     print(f"\nFound {len(executables)} executable(s)")
     
     if args.executables:
-        # Filter executables based on command line arguments
         filter_set = set(args.executables)
         executables = [
             exe for exe in executables
@@ -548,7 +510,6 @@ def main():
     
     print(f"CPU count: {multiprocessing.cpu_count()}")
     
-    # Run each executable
     results = []
     for exe in executables:
         result = run_executable_with_concurrent_touches(
@@ -558,7 +519,6 @@ def main():
         )
         results.append(result)
     
-    # Summary
     print(f"\n{'='*60}")
     print("SUMMARY")
     print(f"{'='*60}")

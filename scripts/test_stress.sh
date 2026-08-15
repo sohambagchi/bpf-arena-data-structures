@@ -1,16 +1,4 @@
 #!/bin/bash
-# Stress test for BPF Arena Data Structure Framework
-# Tests with high concurrency and many operations
-#
-# NOTE: This script is a TEMPLATE for a multi-threaded implementation.
-# The current skeleton implementation uses a simpler design:
-# - Kernel: LSM hook inserts on file creation
-# - Userspace: Single-threaded reader (sleeps, then reads)
-# 
-# Command-line options like -t, -o, -w are for future multi-threaded versions.
-# To test the current implementation, use:
-#   sudo ./skeleton -d 30
-#   sudo ./skeleton_msqueue -d 30
 
 set -e
 
@@ -21,13 +9,11 @@ echo ""
 echo "WARNING: This test may take several minutes"
 echo ""
 
-# Check if running as root
 if [ "$EUID" -ne 0 ]; then
     echo "ERROR: This script must be run as root (use sudo)"
     exit 1
 fi
 
-# Check if program exists
 if [ ! -f "./skeleton" ]; then
     echo "ERROR: skeleton program not found. Run 'make' first."
     exit 1
@@ -36,7 +22,6 @@ fi
 TESTS_PASSED=0
 TESTS_FAILED=0
 
-# Function to run a test
 run_test() {
     local test_name="$1"
     shift
@@ -50,7 +35,6 @@ run_test() {
         echo "  Completed at: $(date '+%H:%M:%S')"
         echo "  ✓ PASSED"
         
-        # Extract and show key metrics
         grep -E "(TOTAL|Test Duration)" /tmp/stress_output.txt || true
         echo ""
         

@@ -1,28 +1,4 @@
 #!/usr/bin/env bash
-#
-# One-click kernel build for bpf-arena-data-structures.
-#
-# Downloads Linux 6.18.44 from cdn.kernel.org, verifies it, configures it with
-# this repo's BPF fragment, builds it, and installs it.
-#
-#   scripts/build-kernel.sh                 # defconfig + BPF fragment, then install
-#   scripts/build-kernel.sh --base running  # start from THIS machine's config
-#   scripts/build-kernel.sh --base full     # the paper's reference .config
-#   scripts/build-kernel.sh --no-install    # build only, touch nothing outside the tree
-#   scripts/build-kernel.sh -y              # no confirmation prompt
-#
-# Exit codes:
-#   1  usage error
-#   2  unsupported platform
-#   3  missing build dependency
-#   4  insufficient disk space
-#   5  download or checksum failure
-#   6  extract failure
-#   7  kernel configuration failure
-#   8  resulting .config does not satisfy the artifact's requirements
-#   9  compile failure
-#  10  install failure
-#
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------
@@ -30,14 +6,10 @@ set -Eeuo pipefail
 # ---------------------------------------------------------------------------
 KERNEL_VERSION="6.18.44"
 KERNEL_URL="https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.tar.xz"
-# From https://cdn.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc
 KERNEL_SHA256="0f72d938f06828e82c90405174fe572287db7bfe089e2fc46572a99a7f240d43"
 
-# Distinguishes the built kernel from anything already installed, so
-# /lib/modules/<ver> and /boot entries can never collide with the running one.
 LOCALVERSION="-bpf-arena"
 
-# ~20 GB per ae.tex, plus slack for modules_install.
 REQUIRED_GB=22
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -66,15 +38,12 @@ else
 fi
 
 STEP_N=0
-# Set once the flags are parsed: 7 with the install step, 6 without. A fixed
-# denominator would end a --no-install run at "[6/7]", which reads as a failure.
 TOTAL_STEPS=7
 step()  { STEP_N=$((STEP_N + 1)); printf '\n%s==> [%d/%d] %s%s\n' "$C_BLU" "$STEP_N" "$TOTAL_STEPS" "$*" "$C_OFF"; }
 info()  { printf '    %s\n' "$*"; }
 warn()  { printf '%swarning:%s %s\n' "$C_YEL" "$C_OFF" "$*" >&2; }
 ok()    { printf '%s    ok:%s %s\n' "$C_GRN" "$C_OFF" "$*"; }
 
-# die <exit-code> <headline> [remediation lines...]
 die() {
     local code="$1" headline="$2"; shift 2
     printf '\n%serror:%s %s\n' "$C_RED" "$C_OFF" "$headline" >&2
@@ -90,8 +59,6 @@ die() {
 
 on_err() {
     local rc=$? line=$1
-    # Anything that reaches here escaped an explicit check; make that obvious
-    # rather than exiting silently under `set -e`.
     printf '\n%sinternal error:%s command failed (rc=%d) at %s:%d\n' \
         "$C_RED" "$C_OFF" "$rc" "${BASH_SOURCE[0]}" "$line" >&2
     printf '  This is a bug in build-kernel.sh -- the failure was not handled.\n' >&2
@@ -161,8 +128,6 @@ ARCH="$(uname -m)"
     "" \
     "ae.tex states the artifact targets x86-64 Linux."
 
-# NixOS has no writable /boot layout, no /sbin/installkernel, and an immutable
-# /etc; `make install` would half-succeed and leave a confusing mess.
 if [[ -e /etc/NIXOS ]] && ((DO_INSTALL)); then
     die 2 "this looks like NixOS, where 'make modules_install install' does not work" \
         "NixOS manages kernels declaratively; there is no /boot layout for" \
@@ -179,7 +144,6 @@ if [[ -e /etc/NIXOS ]] && ((DO_INSTALL)); then
         "Or re-run this script with --no-install to build the tree only."
 fi
 
-# Tools. Each entry is  binary:why:debian-package:fedora-package:arch-package
 REQUIRED_TOOLS=(
     "tar:unpack the source tarball:tar:tar:tar"
     "xz:decompress the .tar.xz:xz-utils:xz:xz"
@@ -192,8 +156,6 @@ REQUIRED_TOOLS=(
     "depmod:module dependency index:kmod:kmod:kmod"
     "python3:verify the resulting .config:python3:python3:python"
 )
-# CONFIG_DEBUG_INFO_BTF=y is set by every path this script can take, and it is
-# a hard build dependency on pahole -- not a warning, the build stops.
 REQUIRED_TOOLS+=("pahole:generate BTF (CONFIG_DEBUG_INFO_BTF=y):dwarves:dwarves:pahole")
 
 missing=()
@@ -210,8 +172,6 @@ if ((${#missing[@]} > 0)); then
         lines+=("$(printf '  %-10s %s' "$bin" "$why")")
         debs+=("$deb"); rpms+=("$rpm"); arches+=("$arch")
     done
-    # Built with pure shell expansion on purpose: an error message must not
-    # depend on external commands, which may be exactly what is missing.
     lines+=("" "Install them with one of:" ""
         "  Debian/Ubuntu:  sudo apt-get install -y ${debs[*]}"
         "  Fedora/RHEL:    sudo dnf install -y ${rpms[*]}"
@@ -220,7 +180,6 @@ if ((${#missing[@]} > 0)); then
     die 3 "missing build dependencies" "${lines[@]}"
 fi
 
-# A downloader -- either is fine.
 DOWNLOADER=""
 if command -v curl >/dev/null 2>&1; then DOWNLOADER="curl"
 elif command -v wget >/dev/null 2>&1; then DOWNLOADER="wget"
@@ -233,7 +192,6 @@ else
         "  Arch:           sudo pacman -S --needed curl"
 fi
 
-# A checksum tool -- refusing to skip verification is deliberate.
 if command -v sha256sum >/dev/null 2>&1; then SHA_CMD=(sha256sum)
 elif command -v shasum >/dev/null 2>&1; then SHA_CMD=(shasum -a 256)
 else
@@ -244,8 +202,6 @@ else
         "  Debian/Ubuntu:  sudo apt-get install -y coreutils"
 fi
 
-# Header-only dependencies that kbuild reports late and cryptically. Probe them
-# now with a real compile so the failure is actionable.
 probe_header() {
     local header="$1" why="$2" deb="$3" rpm="$4" arch="$5"
     printf '#include <%s>\nint main(void){return 0;}\n' "$header" \
@@ -261,11 +217,8 @@ probe_header "elf.h"              "build the kbuild host tools"        "libelf-d
 probe_header "gelf.h"             "build objtool and other kbuild host tools" "libelf-dev" "elfutils-libelf-devel" "libelf"
 probe_header "openssl/opensslv.h" "sign modules and build host tools"  "libssl-dev"    "openssl-devel"         "openssl"
 
-# Avoid head in these pipelines: with pipefail, a multi-line producer can get
-# SIGPIPE and trip the script's ERR trap even though version detection worked.
 ok "toolchain: gcc $(gcc -dumpversion), $(pahole --version 2>&1 | awk 'NR == 1 { first = $0 } END { print first }'), make $(make --version | awk 'NR == 1 { version = $3 } END { print version }')"
 
-# Config fragment must exist -- the whole point of the exercise.
 case "$BASE" in
     defconfig|running)
         [[ -r "$DELTA_CONFIG" ]] || die 1 "cannot read ${DELTA_CONFIG}" \
@@ -291,7 +244,6 @@ if [[ "$BASE" == "running" ]]; then
     ok "base config: ${RUNNING_CONFIG}"
 fi
 
-# Disk space.
 mkdir -p "$WORKDIR" 2>/dev/null || die 4 "cannot create work directory: ${WORKDIR}" \
     "Check permissions, or pick another location with --workdir DIR"
 avail_gb="$(df -BG --output=avail "$WORKDIR" 2>/dev/null | tail -n1 | tr -dc '0-9')"
@@ -432,8 +384,6 @@ case "$BASE" in
         cp_cmd=(cp "$RUNNING_CONFIG" .config)
         [[ "$RUNNING_CONFIG" == *.gz ]] && cp_cmd=(sh -c "zcat '$RUNNING_CONFIG' > .config")
         "${cp_cmd[@]}" || die 7 "could not install ${RUNNING_CONFIG} as .config"
-        # Distro configs reference signing/trusted keys this build has no
-        # access to; clearing them is what every out-of-tree rebuild has to do.
         ./scripts/config --disable SYSTEM_TRUSTED_KEYS \
                          --disable SYSTEM_REVOCATION_KEYS \
                          --disable MODULE_SIG_ALL \
@@ -448,8 +398,6 @@ esac
 
 if [[ "$BASE" != "full" ]]; then
     info "merging ${DELTA_CONFIG#"${REPO_ROOT}/"}"
-    # -m merges without running olddefconfig; we do that ourselves next so a
-    # failure there is attributable.
     ./scripts/kconfig/merge_config.sh -m .config "$DELTA_CONFIG" >/dev/null \
         || die 7 "merging the BPF config fragment failed" \
             "Fragment: ${DELTA_CONFIG}" \
@@ -459,13 +407,9 @@ if [[ "$BASE" != "full" ]]; then
     ok "BPF fragment merged"
 fi
 
-# Distinct version string, so nothing already installed is overwritten.
 ./scripts/config --disable LOCALVERSION_AUTO --set-str LOCALVERSION "$LOCALVERSION" \
     || die 7 "could not set CONFIG_LOCALVERSION"
 
-# olddefconfig resolves everything the fragment implies and takes defaults for
-# symbols the base config never heard of. Never plain 'oldconfig' -- that
-# prompts, and there is nobody here to answer.
 make olddefconfig >/dev/null || die 7 "'make olddefconfig' failed" \
     "Re-run verbosely:  cd '${SRCDIR}' && make olddefconfig"
 ok "olddefconfig resolved"
@@ -497,7 +441,6 @@ BUILD_LOG="${WORKDIR}/build-${KERNEL_VERSION}.log"
 info "full log: ${BUILD_LOG}"
 
 if ! make -j"$JOBS" 2>&1 | tee "$BUILD_LOG" | grep -E --line-buffered '^\s*(LD|AR|BTF|LINK|OBJCOPY|Kernel:)' ; then
-    # tee's status, not grep's -- grep exits 1 when it simply matched nothing.
     if [[ "${PIPESTATUS[0]}" -ne 0 ]]; then
         die 9 "kernel compile failed" \
             "Last errors from ${BUILD_LOG}:" \
@@ -514,8 +457,6 @@ fi
 ok "bzImage: $(du -h arch/x86/boot/bzImage | cut -f1)"
 
 if [[ -f vmlinux ]] && command -v readelf >/dev/null 2>&1; then
-    # Do not use grep -q under pipefail: readelf can receive SIGPIPE after the
-    # first match and make this successful check look like a failure.
     if readelf -S vmlinux 2>/dev/null | grep '\.BTF' >/dev/null; then
         ok "BTF section present in vmlinux"
     else
@@ -593,7 +534,7 @@ Then reboot into it and confirm:
   uname -r                                  # ${KERNEL_VERSION}${LOCALVERSION}
   cat /sys/kernel/security/lsm              # must contain 'bpf'
   python3 scripts/check_kconfig.py          # OK: all requirements met
-  cd '${REPO_ROOT}' && make && sudo python3 scripts/runner.py
+  cd '${REPO_ROOT}' && make && sudo python3 scripts/run_all.py
 
 If 'bpf' is missing from the LSM list after reboot, add it to your kernel
 command line -- no rebuild needed:

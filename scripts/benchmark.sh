@@ -1,16 +1,4 @@
 #!/bin/bash
-# Performance benchmark for BPF Arena Data Structure Framework
-# Measures throughput under various conditions
-#
-# NOTE: This script is a TEMPLATE for a multi-threaded implementation.
-# The current skeleton implementation uses a simpler design:
-# - Kernel: LSM hook inserts on file creation
-# - Userspace: Single-threaded reader (sleeps, then reads)
-# 
-# Command-line options like -t, -o, -w are for future multi-threaded versions.
-# For current implementation benchmarking, measure:
-# - Kernel insert rate during varying system activity
-# - Data structure read time after different sleep durations
 
 set -e
 
@@ -19,25 +7,21 @@ echo "  BPF Arena Framework - Performance Benchmark"
 echo "=========================================="
 echo ""
 
-# Check if running as root
 if [ "$EUID" -ne 0 ]; then
     echo "ERROR: This script must be run as root (use sudo)"
     exit 1
 fi
 
-# Check if program exists
 if [ ! -f "./skeleton" ]; then
     echo "ERROR: skeleton program not found. Run 'make' first."
     exit 1
 fi
 
-# Output file for results
 RESULTS_FILE="benchmark_results.txt"
 echo "Benchmark Results - $(date)" > $RESULTS_FILE
 echo "=====================================" >> $RESULTS_FILE
 echo "" >> $RESULTS_FILE
 
-# Function to run benchmark and extract ops/sec
 run_benchmark() {
     local test_name="$1"
     shift
@@ -47,7 +31,6 @@ run_benchmark() {
     echo "  Command: $cmd"
     
     if $cmd > /tmp/bench_output.txt 2>&1; then
-        # Extract total ops/sec
         local ops_per_sec=$(grep "^TOTAL" /tmp/bench_output.txt | awk '{print $NF}')
         local total_ops=$(grep "^TOTAL" /tmp/bench_output.txt | awk '{print $2}')
         
@@ -55,7 +38,6 @@ run_benchmark() {
         echo "  Throughput: $ops_per_sec ops/sec"
         echo ""
         
-        # Save to results file
         echo "$test_name" >> $RESULTS_FILE
         echo "  Throughput: $ops_per_sec ops/sec" >> $RESULTS_FILE
         echo "  Total Ops:  $total_ops" >> $RESULTS_FILE

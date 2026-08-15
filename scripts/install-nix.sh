@@ -1,27 +1,4 @@
 #!/usr/bin/env bash
-#
-# One-click Nix setup for bpf-arena-data-structures.
-#
-# Installs Nix (multi-user/daemon by default), enables the flakes and
-# nix-command experimental features that `nix develop` in this repo needs,
-# restarts the daemon, and verifies the result.
-#
-#   scripts/install-nix.sh                  # install + configure + verify
-#   scripts/install-nix.sh -y               # no confirmation prompt
-#   scripts/install-nix.sh --no-daemon      # single-user install (~/.config/nix)
-#   scripts/install-nix.sh --configure-only # Nix already installed: just enable flakes
-#
-# Safe to re-run: each step is skipped if it is already done.
-#
-# Exit codes:
-#   1  usage error
-#   2  unsupported platform
-#   3  missing prerequisite (curl, sudo, ...)
-#   4  Nix install failed
-#   5  could not write the Nix configuration file
-#   6  daemon restart failed
-#   7  verification failed (nix too old, or flakes still disabled)
-#
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------
@@ -29,11 +6,8 @@ set -Eeuo pipefail
 # ---------------------------------------------------------------------------
 INSTALLER_URL="https://nixos.org/nix/install"
 
-# inputs.self.submodules in flake.nix -- the mechanism that pulls third_party/
-# into the flake source tree -- landed in Nix 2.27.
 REQUIRED_NIX_VERSION="2.27"
 
-# The two features `nix develop` / `nix build .#...` are gated behind.
 REQUIRED_FEATURES=(nix-command flakes)
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -63,7 +37,6 @@ warn()  { printf '%swarning:%s %s\n' "$C_YEL" "$C_OFF" "$*" >&2; }
 ok()    { printf '%s    ok:%s %s\n' "$C_GRN" "$C_OFF" "$*"; }
 skip()  { printf '%s    --:%s %s\n' "$C_DIM" "$C_OFF" "$*"; }
 
-# die <exit-code> <headline> [remediation lines...]
 die() {
     local code="$1" headline="$2"; shift 2
     printf '\n%serror:%s %s\n' "$C_RED" "$C_OFF" "$headline" >&2
@@ -111,12 +84,9 @@ esac
 IS_NIXOS=0
 [[ -e /etc/NIXOS ]] && IS_NIXOS=1
 
-# Determinate Systems' installer leaves this behind and manages /etc/nix itself.
 IS_DETERMINATE=0
 [[ -e /nix/receipt.json ]] && IS_DETERMINATE=1
 
-# Pull an existing daemon install into this shell, so `command -v nix` is
-# meaningful on a re-run from a shell that predates the install.
 load_nix_profile() {
     local p
     for p in /etc/profile.d/nix.sh \
@@ -134,10 +104,8 @@ have_nix() { command -v nix >/dev/null 2>&1; }
 
 nix_version() { nix --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1; }
 
-# version_ge <a> <b>  ->  true when a >= b
 version_ge() { [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" == "$2" ]]; }
 
-# Which nix.conf this install actually reads.
 if ((DAEMON)); then
     NIX_CONF="/etc/nix/nix.conf"
 else
@@ -193,8 +161,6 @@ elif ((CONFIGURE_ONLY)); then
         "or re-run without --configure-only."
 else
     installer_args=( "$( ((DAEMON)) && echo '--daemon' || echo '--no-daemon' )" )
-    # The tarball's own installer takes --yes; without it, it stops for two
-    # confirmations of its own after we already asked once.
     ((ASSUME_YES)) && installer_args+=( --yes )
     info "curl -L $INSTALLER_URL | sh -s -- ${installer_args[*]}"
     info "(the installer prints its own plan and asks for sudo)"
@@ -217,11 +183,6 @@ fi
 step "Enabling experimental features (${REQUIRED_FEATURES[*]})"
 
 features_active() {
-    # Ask Nix what it actually resolved, rather than reading nix.conf back:
-    # this also catches a second experimental-features line further down the
-    # file overriding the first, and the daemon not having been restarted.
-    # --extra-experimental-features nix-command is what makes `nix config show`
-    # itself runnable while nix-command is still off.
     local shown f
     shown=" $(nix --extra-experimental-features nix-command \
                   config show experimental-features 2>/dev/null) " || return 1
@@ -244,17 +205,12 @@ elif ((IS_DETERMINATE)) && features_active; then
 elif features_active; then
     skip "already enabled"
 else
-    # Append rather than rewrite. Nix lets the last occurrence of a setting win,
-    # so an existing narrower experimental-features line would silently override
-    # ours if we prepended -- and would be lost if we replaced the file.
     existing=""
     if [[ -f "$NIX_CONF" ]]; then
         existing="$(grep -E '^[[:space:]]*experimental-features[[:space:]]*=' "$NIX_CONF" | tail -n1 || true)"
         [[ -n "$existing" ]] && info "existing line: $existing"
     fi
 
-    # Union of what is already configured and what we need. Word-splitting the
-    # old value is what normalises its whitespace.
     # shellcheck disable=SC2206
     wanted=( ${existing#*=} )
     for f in "${REQUIRED_FEATURES[@]}"; do

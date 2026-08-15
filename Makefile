@@ -1,34 +1,15 @@
 # SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
-# Makefile for Concurrent Data Structure Testing Framework
-# 
-# This Makefile builds BPF programs and userspace applications for testing
-# concurrent data structures using BPF arena shared memory.
-#
-# USAGE:
-#   make                    # Build all programs
-#   make skeleton           # Build just the skeleton test program
-#   make clean              # Remove all build artifacts
-#   make test               # Run basic smoke tests
-#
-# CUSTOMIZATION:
-#   Set CLANG to use a specific clang version
-#   Set LIBBPF_SRC to point to your libbpf source
-#   Set VMLINUX to use a different vmlinux.h
 
 # ============================================================================
 # OUTPUT DIRECTORY
 # ============================================================================
-# All build artifacts go here to keep the source tree clean
 OUTPUT := .output
 
-# Directory for final binaries (user-facing build artifacts)
 OUT_DIR ?= build
 
 # ============================================================================
 # TOOLCHAIN CONFIGURATION
 # ============================================================================
-# Compiler for BPF programs (must support BPF target)
-# Recommend Clang 15+ for BPF arena support (clang-20 recommended if available)
 CLANG ?= clang-20
 
 ifeq ($(origin CLANG), file)
@@ -39,30 +20,24 @@ endif
 endif
 endif
 
-# Compiler for userspace programs
 CC ?= gcc
 OBJDUMP ?= objdump
 
 # ============================================================================
 # DEPENDENCY PATHS
 # ============================================================================
-# libbpf source directory - provides BPF loading and management APIs
 LIBBPF_SRC := $(abspath ./third_party/libbpf/src)
 
-# bpftool source directory - generates BPF skeletons
 BPFTOOL_SRC := $(abspath ./third_party/bpftool/src)
 
-# Built libbpf static library
 LIBBPF_OBJ := $(abspath $(OUTPUT)/libbpf.a)
 
-# bpftool output directory and binary
 BPFTOOL_OUTPUT ?= $(abspath $(OUTPUT)/bpftool)
 BPFTOOL ?= $(BPFTOOL_OUTPUT)/bootstrap/bpftool
 
 # ============================================================================
 # ARCHITECTURE DETECTION
 # ============================================================================
-# Detect current architecture and normalize to kernel naming
 ARCH ?= $(shell uname -m | sed 's/x86_64/x86/' \
 			 | sed 's/arm.*/arm/' \
 			 | sed 's/aarch64/arm64/' \
@@ -71,55 +46,38 @@ ARCH ?= $(shell uname -m | sed 's/x86_64/x86/' \
 			 | sed 's/riscv64/riscv/' \
 			 | sed 's/loongarch64/loongarch/')
 
-# vmlinux.h - kernel type definitions for BPF programs
-# VMLINUX := ./third_party/vmlinux/include/$(ARCH)/vmlinux.h
 VMLINUX := ./third_party/vmlinux.h
 
 # ============================================================================
 # INCLUDE PATHS
 # ============================================================================
-# Include paths for both BPF and userspace compilation:
-# - $(OUTPUT): For generated skeleton headers
-# - libbpf/include/uapi: For BPF UAPI headers
-# - $(dir $(VMLINUX)): For vmlinux.h
-# - ./include: For local headers (ds_api.h, libarena_ds.h, etc.)
 INCLUDES := -I$(OUTPUT) -I./third_party/libbpf/include/uapi -I$(dir $(VMLINUX)) -I./include
 
 # ============================================================================
 # COMPILER FLAGS
 # ============================================================================
-# Userspace C flags
 CFLAGS := -g -Wall -Wextra -O0 -DLKMM_OPTIMIZED
 
-# Linker flags
 ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
 
 # ============================================================================
 # APPLICATION LIST
 # ============================================================================
-# List of all applications to build
-# - BPF_APPS: BPF-backed (need skeleton generation + libbpf)
-# - USERTEST_APPS: pure userspace pthread tests (no BPF, no CLI args)
 BPF_APPS = skeleton_msqueue skeleton_vyukhov skeleton_folly_spsc skeleton_ck_fifo_spsc skeleton_ck_ring_spsc skeleton_ck_stack_upmc skeleton_io_uring skeleton_kcov
 USERTEST_APPS = usertest_msqueue usertest_vyukhov usertest_folly_spsc usertest_ck_fifo_spsc usertest_ck_ring_spsc usertest_ck_stack_upmc
 APPS = $(BPF_APPS) $(USERTEST_APPS)
 
-# Final binaries (placed in OUT_DIR)
 BINARIES := $(patsubst %,$(OUT_DIR)/%,$(APPS))
 
 # ============================================================================
 # CLANG BPF SYSTEM INCLUDES
 # ============================================================================
-# Get Clang's default include directories for BPF compilation.
-# This ensures architecture-specific headers are found when compiling
-# with -target bpf. Without this, headers like asm/types.h would be missing.
 CLANG_BPF_SYS_INCLUDES ?= $(shell $(CLANG) -v -E - </dev/null 2>&1 \
 	| sed -n '/<...> search starts here:/,/End of search list./{ s| \(/.*\)|-idirafter \1|p }')
 
 # ============================================================================
 # VERBOSE BUILD CONTROL
 # ============================================================================
-# Set V=1 for verbose output showing full commands
 ifeq ($(V),1)
 	Q =
 	msg =
@@ -135,7 +93,6 @@ endif
 # ============================================================================
 # COMPILER OVERRIDE SUPPORT
 # ============================================================================
-# Allow environment variables to override default compilers
 define allow-override
   $(if $(or $(findstring environment,$(origin $(1))),\
             $(findstring command line,$(origin $(1)))),,\
@@ -148,7 +105,6 @@ $(call allow-override,LD,$(CROSS_COMPILE)ld)
 # ============================================================================
 # MAIN TARGETS
 # ============================================================================
-
 
 .PHONY: all
 all: $(BINARIES)
@@ -165,7 +121,6 @@ clean:
 	$(call msg,CLEAN)
 	$(Q)rm -rf $(OUTPUT) $(OUT_DIR)
 
-# Create output directories
 $(OUTPUT) $(OUTPUT)/libbpf $(BPFTOOL_OUTPUT) $(OUT_DIR):
 	$(call msg,MKDIR,$@)
 	$(Q)mkdir -p $@
@@ -174,8 +129,6 @@ $(OUTPUT) $(OUTPUT)/libbpf $(BPFTOOL_OUTPUT) $(OUT_DIR):
 # DEPENDENCY BUILDS
 # ============================================================================
 
-# Build libbpf static library
-# This provides functions like bpf_object__open, bpf_program__attach, etc.
 $(LIBBPF_OBJ): $(wildcard $(LIBBPF_SRC)/*.[ch] $(LIBBPF_SRC)/Makefile) | $(OUTPUT)/libbpf
 	$(call msg,LIB,$@)
 	$(Q)$(MAKE) -C $(LIBBPF_SRC) BUILD_STATIC_ONLY=1		      \
@@ -183,8 +136,6 @@ $(LIBBPF_OBJ): $(wildcard $(LIBBPF_SRC)/*.[ch] $(LIBBPF_SRC)/Makefile) | $(OUTPU
 		    INCLUDEDIR= LIBDIR= UAPIDIR=			      \
 		    install
 
-# Build bpftool
-# This generates BPF skeleton headers from compiled BPF objects
 $(BPFTOOL): | $(BPFTOOL_OUTPUT)
 	$(call msg,BPFTOOL,$@)
 	$(Q)$(MAKE) ARCH= CROSS_COMPILE= OUTPUT=$(BPFTOOL_OUTPUT)/ -C $(BPFTOOL_SRC) bootstrap
@@ -193,17 +144,6 @@ $(BPFTOOL): | $(BPFTOOL_OUTPUT)
 # BPF PROGRAM COMPILATION
 # ============================================================================
 
-# Compile .bpf.c source to BPF object file
-# 
-# Steps:
-# 1. Compile to temporary BPF object with -target bpf
-# 2. Use bpftool to generate final object with CO-RE relocations
-#
-# Key flags:
-# - -target bpf: Generate BPF bytecode
-# - -D__TARGET_ARCH_$(ARCH): Define target architecture
-# - -D__BPF_FEATURE_ADDR_SPACE_CAST: Enable arena address space casting
-# - -O2: Optimize (required for BPF verifier)
 $(OUTPUT)/%.bpf.o: src/%.bpf.c $(LIBBPF_OBJ) $(wildcard include/*.h) $(VMLINUX) | $(OUTPUT) $(BPFTOOL)
 	$(call msg,BPF,$@)
 	$(Q)$(CLANG) -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH) -D__BPF_FEATURE_ADDR_SPACE_CAST	      \
@@ -215,15 +155,6 @@ $(OUTPUT)/%.bpf.o: src/%.bpf.c $(LIBBPF_OBJ) $(wildcard include/*.h) $(VMLINUX) 
 # BPF SKELETON GENERATION
 # ============================================================================
 
-# Generate BPF skeleton header from compiled BPF object
-#
-# The skeleton header provides:
-# - struct <name>_bpf: Contains map and program file descriptors
-# - <name>_bpf__open_and_load(): Load BPF program
-# - <name>_bpf__attach(): Attach to hooks
-# - <name>_bpf__destroy(): Cleanup
-# - Access to maps via skel->maps.<map_name>
-# - Access to global variables via skel->bss-><var_name>
 $(OUTPUT)/%.skel.h: $(OUTPUT)/%.bpf.o | $(OUTPUT) $(BPFTOOL)
 	$(call msg,GEN-SKEL,$@)
 	$(Q)$(BPFTOOL) gen skeleton $< > $@
@@ -232,15 +163,12 @@ $(OUTPUT)/%.skel.h: $(OUTPUT)/%.bpf.o | $(OUTPUT) $(BPFTOOL)
 # USERSPACE COMPILATION
 # ============================================================================
 
-# Compile userspace .c files to object files
-# These depend on the skeleton header being generated first
 $(patsubst %,$(OUTPUT)/%.o,$(BPF_APPS)): %.o: %.skel.h
 
 $(OUTPUT)/%.o: src/%.c $(wildcard include/*.h) | $(OUTPUT)
 	$(call msg,CC,$@)
 	$(Q)$(CC) $(CFLAGS) $(INCLUDES) -c $(filter %.c,$^) -o $@
 
-# Userspace-only test runners (no libbpf / no skeleton headers)
 $(OUTPUT)/%.o: usertest/%.c $(wildcard include/*.h) usertest/usertest_common.h | $(OUTPUT)
 	$(call msg,CC,$@)
 	$(Q)$(CC) $(CFLAGS) $(INCLUDES) -c $(filter %.c,$^) -o $@
@@ -249,18 +177,10 @@ $(OUTPUT)/%.o: usertest/%.c $(wildcard include/*.h) usertest/usertest_common.h |
 # BINARY LINKING
 # ============================================================================
 
-# Link userspace object with libbpf to create final executable
-#
-# Libraries needed:
-# - libbpf (BPF program loading/management)
-# - libelf (ELF file parsing)
-# - libz (compression, used by libbpf)
-# Link objects into final binaries under OUT_DIR
 $(OUT_DIR)/%: $(OUTPUT)/%.o $(LIBBPF_OBJ) | $(OUTPUT) $(OUT_DIR)
 	$(call msg,BINARY,$@)
 	$(Q)$(CC) $(CFLAGS) $^ $(ALL_LDFLAGS) -lelf -lz -lpthread -o $@
 
-# Keep compatibility: allow `make <app>` to build $(OUT_DIR)/<app>
 $(APPS): %: $(OUT_DIR)/%
 
 .PHONY: usertest
@@ -275,7 +195,6 @@ usertest: $(patsubst %,$(OUT_DIR)/%,$(USERTEST_APPS))
 
 .PHONY: test
 
-## Assembly/disassembly target for built binaries
 .PHONY: asm
 asm: $(patsubst %,$(OUT_DIR)/%.S,$(BPF_APPS))
 
@@ -291,7 +210,7 @@ $(OUT_DIR)/%.S: $(OUT_DIR)/% | $(OUT_DIR)
 	$(Q)$(OBJDUMP) -d -M intel -S $< > $@
 
 .PHONY: test
-test: $(OUT_DIR)/skeleton $(OUT_DIR)/skeleton_msqueue
+test: $(OUT_DIR)/skeleton_msqueue
 	@echo "Running basic tests..."
 	@echo ""
 	@echo "Test 1: Skeleton MS Queue - 5 second sleep"
@@ -301,7 +220,7 @@ test: $(OUT_DIR)/skeleton $(OUT_DIR)/skeleton_msqueue
 
 .PHONY: test-stress
 
-test-stress: $(OUT_DIR)/skeleton $(OUT_DIR)/skeleton_msqueue
+test-stress: $(OUT_DIR)/skeleton_msqueue
 	@echo "Running stress tests..."
 	@echo "This may take a few minutes..."
 	@echo ""
@@ -312,7 +231,7 @@ test-stress: $(OUT_DIR)/skeleton $(OUT_DIR)/skeleton_msqueue
 
 .PHONY: test-verify
 
-test-verify: $(OUT_DIR)/skeleton $(OUT_DIR)/skeleton_msqueue
+test-verify: $(OUT_DIR)/skeleton_msqueue
 	@echo "Running verification tests..."
 	@echo ""
 	@echo "Test 1: Skeleton MS Queue with verification"
@@ -328,15 +247,15 @@ help:
 	@echo "BPF Arena Data Structure Testing Framework"
 	@echo ""
 	@echo "Prerequisites:"
-	@echo "  - Linux kernel 6.10+ (see kernel/configs/bpf-arena.config;"
+	@echo "  - Linux kernel 6.10+ (see kernel/configs/delta-bpf-arena.config;"
 	@echo "    check yours with: python3 scripts/check_kconfig.py)"
 	@echo "  - LLVM/Clang 15+ with BPF support (clang-20 recommended)"
-	@echo "  - libbpf 1.0+, libelf and zlib"
+	@echo "  - libelf and zlib (libbpf and bpftool are vendored in third_party/)"
 	@echo "  - Initialize third-party submodules: git submodule update --init --recursive"
 	@echo ""
 	@echo "Targets:"
 	@echo "  all          Build all programs (default)"
-	@echo "  skeleton     Build skeleton test program"
+	@echo "  usertest     Build only the userspace-only pthread tests"
 	@echo "  clean        Remove all build artifacts"
 	@echo "  test         Run basic smoke tests"
 	@echo "  test-stress  Run stress tests"
@@ -353,13 +272,14 @@ help:
 	@echo "  make test               # Run smoke tests (invokes built binaries under $(OUT_DIR))"
 	@echo "  sudo $(OUT_DIR)/skeleton_msqueue     # Run the skeleton MS Queue test (interactive)"
 	@echo "  sudo $(OUT_DIR)/skeleton_msqueue -v  # Run with verification on exit"
+	@echo ""
+	@echo "Build here first, unprivileged; then run the full pipeline:"
+	@echo "  sudo python3 scripts/run_all.py      # it compiles nothing itself"
 
 # ============================================================================
 # MAKE DIRECTIVES
 # ============================================================================
 
-# Delete targets if their recipe fails
 .DELETE_ON_ERROR:
 
-# Keep intermediate files (.skel.h, .bpf.o, etc)
 .SECONDARY:

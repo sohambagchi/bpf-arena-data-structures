@@ -26,7 +26,11 @@
   - `src/skeleton_io_uring.bpf.c` + `src/skeleton_io_uring.c` io_uring ring relay
   - `src/skeleton_kcov.bpf.c` + `src/skeleton_kcov.c` kcov buffer relay
 - `usertest/` userspace-only pthread tests
+- `scripts/run_all.py` pipeline endpoint: kconfig -> usertests -> runner, over
+  the binaries `make` produced (it compiles nothing itself)
 - `scripts/usertests.py` maintained test runner
+- `scripts/check_kconfig.py` kernel-config check; `scripts/build-kernel.sh`
+  builds and installs the 6.18 reference kernel
 
 ## Important status note
 

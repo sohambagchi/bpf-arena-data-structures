@@ -19,7 +19,7 @@ Defaults to /boot/config-$(uname -r), falling back to /proc/config.gz.
 Runtime checks run only for that auto-detected config (override with
 --runtime / --no-runtime).
 
-The companion file kernel/configs/bpf-arena.config sets only the
+The companion file kernel/configs/delta-bpf-arena.config sets only the
 user-settable symbols. This script additionally verifies the derived ones
 (def_bool / select-only) that olddefconfig is expected to turn on, since a
 fragment cannot set those and a silently-missing one shows up much later as
@@ -41,7 +41,6 @@ UNSET_RE = re.compile(r"^# CONFIG_([A-Z0-9_]+) is not set$")
 RUNTIME_LSM_PATH = "/sys/kernel/security/lsm"
 CMDLINE_PATH = "/proc/cmdline"
 
-# (symbol, group, settable_by_fragment, why)
 REQUIRED = [
     ("BPF_SYSCALL", "arena", True,
      "bpf() syscall; kernel/bpf/Makefile gates arena.o on it"),
@@ -87,13 +86,11 @@ GROUP_TITLES = {
     "btf": "BTF / CO-RE",
 }
 
-# Required to be off, because DEBUG_INFO_BTF depends on !X.
 MUST_BE_OFF = [
     ("DEBUG_INFO_SPLIT", "DEBUG_INFO_BTF depends on !DEBUG_INFO_SPLIT"),
     ("DEBUG_INFO_REDUCED", "DEBUG_INFO_BTF depends on !DEBUG_INFO_REDUCED"),
 ]
 
-# (symbol, note) -- reported but never fatal.
 OPTIONAL = [
     ("DEBUG_INFO_BTF_MODULES", "BTF for kernel modules"),
     ("IO_URING", "only needed for a real-io_uring comparison variant; "
@@ -267,14 +264,10 @@ def main():
     if not args.quiet:
         print()
 
-    # CONFIG_LSM is a string, not a bool: it must list "bpf".
     lsm = values.get("LSM", "").strip('"')
     config_lsms = split_lsm(lsm)
     config_lsm_ok = "bpf" in config_lsms
 
-    # Runtime state, when this is the config the running kernel booted from.
-    # It overrides the text check in both directions: an lsm= command line can
-    # take "bpf" away that the config has, or supply one the config lacks.
     active = read_active_lsms() if runtime else None
     cmdline_lsms = read_cmdline_lsm() if runtime else None
     lsm_fix = None
@@ -288,15 +281,11 @@ def main():
         lsm_ok = "bpf" in active
         if not lsm_ok:
             lsm_fix = lsm_fix_value(config_lsms, cmdline_lsms)
-            # settable=None: neither a fragment symbol nor a derived one --
-            # it has its own remediation block below.
             failures.append(("LSM", "not active at runtime", None,
                              'the running kernel did not activate the BPF LSM'))
 
     if not args.quiet or not lsm_ok:
         print("  LSM ordering")
-        # When runtime state is known it is authoritative, so a config that
-        # lacks "bpf" is informational (--) rather than a failure (!!).
         config_mark = "ok" if config_lsm_ok else ("--" if lsm_ok else "!!")
         print("    [%s] CONFIG_LSM contains \"bpf\"%s"
               % (config_mark,
@@ -348,7 +337,7 @@ def main():
         frag = [f for f in failures if f[2] is True]
         derived = [f for f in failures if f[2] is False]
         if frag:
-            print("  Set via kernel/configs/bpf-arena.config:")
+            print("  Set via kernel/configs/delta-bpf-arena.config:")
             for sym, state, _, _ in frag:
                 print("    CONFIG_%s (%s)" % (sym, state))
         if derived:
@@ -358,7 +347,6 @@ def main():
             for sym, state, _, why in derived:
                 print("    CONFIG_%s (%s) -- %s" % (sym, state, why))
         if lsm_fix:
-            # A boot-time problem, not a build-time one: no rebuild required.
             print("\n  The BPF LSM is compiled in but was not activated at boot.")
             print("  This needs no kernel rebuild -- only a command line change:\n")
             print_lsm_fix(lsm_fix)
