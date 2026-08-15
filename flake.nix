@@ -49,6 +49,7 @@
         openssl ncurses
         pahole                # /sys/kernel/btf/vmlinux
         zstd xz gzip
+        curl cacert           # build-kernel.sh fetches from cdn.kernel.org
         qemu_kvm              # boot the result without touching the host
       ];
 
@@ -109,16 +110,14 @@
       # devShells
       # =====================================================================
       devShells = forAllSystems (system: pkgs: {
-        # nix develop  ->  git submodule update --init --recursive && make
-        #
-        # Deliberately does NOT pull in kernelTools: every -dev input lands in
-        # clang's include search list, which the Makefile turns into
-        # CLANG_BPF_SYS_INCLUDES and feeds to the BPF compile as -idirafter.
-        # Keeping ncurses/openssl/qemu headers out of that keeps the BPF
-        # objects reproducible. Use `nix develop .#kernel` to build a kernel.
+        # nix develop  ->  one shell with everything: the artifact toolchain
+        # AND what it takes to configure and build a kernel from
+        # kernel/configs/. There is no separate kernel shell to remember; the
+        # only thing kept out of here is the QEMU guest, which is `nix run .#vm`
+        # because it is a booted machine rather than a set of tools.
         default = pkgs.mkShell {
           name = "bpf-arena-ds";
-          packages = artifactTools pkgs;
+          packages = artifactTools pkgs ++ kernelTools pkgs;
 
           # nixpkgs' cc-wrapper injects hardening flags that the BPF backend
           # rejects outright: -fzero-call-used-regs=used-gpr is an error for
@@ -133,44 +132,43 @@
             # stray clang-20 on the host PATH cannot win.
             export CLANG=clang
             export CC=gcc
+
+            # Every -dev input in the shell lands in NIX_CFLAGS_COMPILE, hence
+            # in `clang -v -E -`'s search list, which the Makefile turns into
+            # CLANG_BPF_SYS_INCLUDES and feeds to the BPF compile as
+            # -idirafter. With ncurses/openssl/pahole here for the kernel side,
+            # that tail would grow with the shell's package set. Probe once
+            # with the injected flags cleared: what is left is the clang
+            # resource dir plus libc, which is what the BPF objects are
+            # supposed to see, and it no longer moves when this list does.
+            #
+            # tr: the Makefile pastes this into a recipe line verbatim, and an
+            # embedded newline would end that shell command early -- clang
+            # would then see no -c and try to link.
+            export CLANG_BPF_SYS_INCLUDES="$(
+              NIX_CFLAGS_COMPILE="" NIX_CFLAGS_COMPILE_BEFORE="" \
+                clang -v -E - </dev/null 2>&1 \
+                | sed -n '/<...> search starts here:/,/End of search list./{ s| \(/.*\)|-idirafter \1|p }' \
+                | tr '\n' ' '
+            )"
+
             echo "bpf-arena-data-structures dev shell"
             echo "  clang : $(clang --version | head -n1)"
             echo "  gcc   : $(gcc  --version | head -n1)"
             echo "  python: $(python3 --version)"
+            echo "  kernel: bison flex bc pahole qemu on PATH"
             echo
             echo "  build : git submodule update --init --recursive && make"
             echo "  test  : python3 scripts/usertests.py --build"
             echo "  kconf : python3 scripts/check_kconfig.py"
+            echo "  kbuild: ./scripts/build-kernel.sh --base running -y"
             echo "  vm    : nix run .#vm     (boots Linux ${pkgs.linux_6_18.version} with this repo's config)"
           '';
         };
 
-        # nix develop .#kernel  ->  everything above, plus what it takes to
-        # configure, build and boot a kernel from kernel/configs/.
-        kernel = pkgs.mkShell {
-          name = "bpf-arena-ds-kernel";
-          packages = artifactTools pkgs ++ kernelTools pkgs;
-          hardeningDisable = [ "all" ];
-          shellHook = ''
-            export CLANG=clang
-            cat <<'EOF'
-            bpf-arena-data-structures kernel shell
-
-              # exact reference config, built by nix:
-              nix build .#kernel
-
-              # or by hand, against your own linux tree:
-              cd /path/to/linux
-              cp ${toString ./kernel/configs/full-6.18.2-bpf.config} .config
-              make olddefconfig && make -j$(nproc)
-
-              # or merge just the delta into an existing .config:
-              ./scripts/kconfig/merge_config.sh -m .config \
-                  ${toString ./kernel/configs/delta-bpf-arena.config}
-              make olddefconfig && make -j$(nproc)
-            EOF
-          '';
-        };
+        # Kept as an alias: `nix develop .#kernel` used to be a separate,
+        # larger shell and appears in older notes. It is the default shell now.
+        kernel = self.devShells.${system}.default;
       });
 
       # =====================================================================

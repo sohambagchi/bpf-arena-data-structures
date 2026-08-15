@@ -10,6 +10,11 @@ clang --version
 
 You need kernel 6.10+ with `CONFIG_BPF_ARENA=y`.
 
+To get the toolchain instead of installing it piecemeal, `nix develop` gives you
+all of it in one shell (clang-20, gcc, python3, plus the kernel build tools).
+`DOCKER_NIX_INSTALL.md` covers installing Nix itself, or run
+`scripts/install-nix.sh`.
+
 ## 2) Build
 
 ```bash

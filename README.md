@@ -56,18 +56,22 @@ python3). Pick one:
 git submodule update --init --recursive   # required by both
 
 # Nix
-nix develop                               # toolchain shell, repo mounted in place
+nix develop                               # toolchain + kernel tools, repo in place
 
 # Docker
 docker build -t bpf-arena-ds .
 docker run --rm -it -v "$PWD:/artifact" bpf-arena-ds
 ```
 
-If the tool is not installed:
+If the tool is not installed, `DOCKER_NIX_INSTALL.md` has the full procedure for
+both. The short version:
 
-- **Nix** — <https://nixos.org/download/>, or the Determinate Systems
-  installer at <https://github.com/DeterminateSystems/nix-installer>. Needs
-  Nix >= 2.27 with flakes enabled.
+- **Nix** — `scripts/install-nix.sh` installs it and enables the flakes support
+  `nix develop` needs (a stock install has flakes off, so `nix develop` fails
+  until `experimental-features` is set). By hand:
+  <https://nixos.org/download/>, or the Determinate Systems installer at
+  <https://github.com/DeterminateSystems/nix-installer>, which enables flakes
+  for you. Needs Nix >= 2.27.
 - **Docker** — <https://docs.docker.com/engine/install/> (Linux), or Docker
   Desktop at <https://docs.docker.com/desktop/>.
 
@@ -279,7 +283,10 @@ Two packaged environments cover the toolchain.
 ### Nix (`flake.nix`)
 
 ```bash
-nix develop                  # clang-20, gcc, libelf, zlib, openssl, python3
+nix develop                  # one shell: clang-20, gcc, libelf, zlib, openssl,
+                             # python3, plus bison/flex/bc/pahole/QEMU for the
+                             # kernel step
+
 make                         # builds into build/
 
 nix build .#artifact         # same 14 binaries, hermetically
@@ -288,14 +295,20 @@ nix run .#vm                 # boot that kernel in QEMU, repo mounted at /repo
 nix flake check              # builds the artifact + validates the reference .config
 ```
 
-`nix run .#vm` is the only environment here that gives you the paper's kernel at
-runtime: it builds `full-6.18.2-bpf.config` against the 6.18 source, boots it
-under QEMU with `lsm=...,bpf` on the command line, and drops you at a root shell
-with the toolchain on PATH. `nix develop .#kernel` adds bison/flex/bc/pahole/QEMU
-for building a kernel by hand.
+`nix develop` is a single shell that covers every step, `scripts/build-kernel.sh`
+included — there is no separate kernel shell to remember (`.#kernel` still
+resolves, as an alias for the default). The one thing kept out of it is
+`nix run .#vm`, which is a booted machine rather than a set of tools: it builds
+`full-6.18.2-bpf.config` against the 6.18 source, boots it under QEMU with
+`lsm=...,bpf` on the command line, and drops you at a root shell with the
+toolchain on PATH. That is the only environment here that gives you the paper's
+kernel at runtime.
 
 Needs Nix >= 2.27 with flakes enabled (`inputs.self.submodules` pulls in
-`third_party/`), and `git submodule update --init --recursive` beforehand.
+`third_party/`), and `git submodule update --init --recursive` beforehand. If
+Nix is not installed yet, or `nix develop` fails with "experimental Nix feature
+'nix-command' is disabled", see `DOCKER_NIX_INSTALL.md` — or run
+`scripts/install-nix.sh`, which does the whole install-and-enable-flakes dance.
 
 ### Docker (`Dockerfile`)
 

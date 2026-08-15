@@ -216,7 +216,7 @@ if ((${#missing[@]} > 0)); then
         "  Debian/Ubuntu:  sudo apt-get install -y ${debs[*]}"
         "  Fedora/RHEL:    sudo dnf install -y ${rpms[*]}"
         "  Arch:           sudo pacman -S --needed ${arches[*]}"
-        "" "Or get all of them at once with:  nix develop .#kernel")
+        "" "Or get all of them at once with:  nix develop")
     die 3 "missing build dependencies" "${lines[@]}"
 fi
 

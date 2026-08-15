@@ -3,6 +3,9 @@
 ## Start here
 - `README.md` project overview and current feature set
 - `QUICKSTART.md` minimal setup and run flow
+- `DOCKER_NIX_INSTALL.md` installing Nix (and Docker) on a fresh machine,
+  including the flakes setting a stock Nix install leaves off; automated by
+  `scripts/install-nix.sh`
 
 ## Core technical docs
 - `docs/GUIDE.md` current architecture, build/test workflow, and extension points
