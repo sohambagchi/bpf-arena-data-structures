@@ -258,9 +258,12 @@ probe_header() {
         "  Arch:           sudo pacman -S --needed ${arch}"
 }
 probe_header "elf.h"              "build the kbuild host tools"        "libelf-dev"    "elfutils-libelf-devel" "libelf"
+probe_header "gelf.h"             "build objtool and other kbuild host tools" "libelf-dev" "elfutils-libelf-devel" "libelf"
 probe_header "openssl/opensslv.h" "sign modules and build host tools"  "libssl-dev"    "openssl-devel"         "openssl"
 
-ok "toolchain: gcc $(gcc -dumpversion), $(pahole --version 2>&1 | head -n1), make $(make --version | head -n1 | awk '{print $3}')"
+# Avoid head in these pipelines: with pipefail, a multi-line producer can get
+# SIGPIPE and trip the script's ERR trap even though version detection worked.
+ok "toolchain: gcc $(gcc -dumpversion), $(pahole --version 2>&1 | awk 'NR == 1 { first = $0 } END { print first }'), make $(make --version | awk 'NR == 1 { version = $3 } END { print version }')"
 
 # Config fragment must exist -- the whole point of the exercise.
 case "$BASE" in
@@ -433,6 +436,7 @@ case "$BASE" in
         # access to; clearing them is what every out-of-tree rebuild has to do.
         ./scripts/config --disable SYSTEM_TRUSTED_KEYS \
                          --disable SYSTEM_REVOCATION_KEYS \
+                         --disable MODULE_SIG_ALL \
                          --set-str CONFIG_MODULE_SIG_KEY "" || true
         ok "seeded from ${RUNNING_CONFIG}"
         ;;
@@ -510,7 +514,9 @@ fi
 ok "bzImage: $(du -h arch/x86/boot/bzImage | cut -f1)"
 
 if [[ -f vmlinux ]] && command -v readelf >/dev/null 2>&1; then
-    if readelf -S vmlinux 2>/dev/null | grep -q '\.BTF'; then
+    # Do not use grep -q under pipefail: readelf can receive SIGPIPE after the
+    # first match and make this successful check look like a failure.
+    if readelf -S vmlinux 2>/dev/null | grep '\.BTF' >/dev/null; then
         ok "BTF section present in vmlinux"
     else
         warn "no .BTF section in vmlinux -- libbpf will not be able to attach the"

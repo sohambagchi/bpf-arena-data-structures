@@ -109,8 +109,11 @@ def trace_pipe_reader(output_path: Path, stop_event: threading.Event):
     trace_process = None
     with output_path.open('w', encoding='utf-8') as output_file:
         try:
+            # The runner itself is required to run as root.  Do not wrap cat
+            # in sudo: terminating sudo leaves its cat child orphaned, holding
+            # trace_pipe open and silently stealing all later trace output.
             trace_process = subprocess.Popen(
-                ['sudo', 'cat', TRACE_PIPE_PATH],
+                ['cat', TRACE_PIPE_PATH],
                 stdout=output_file,
                 stderr=subprocess.DEVNULL,
                 text=True,
@@ -156,14 +159,22 @@ def validate_trace_output(trace_log_path: Path, executable: str, produced_touch_
         return False
 
     consumed_counter = Counter(consumed_keys)
-    unexpected_keys = consumed_counter - expected_counter
-    if unexpected_keys:
-        unexpected_total = sum(unexpected_keys.values())
-        print(f"  Trace validation FAILED: {unexpected_total} consumed keys were not in initial touch inputs")
-        print(f"    Unexpected keys and counts: {dict(unexpected_keys)}")
+    matched_counter = consumed_counter & expected_counter
+    matched_total = sum(matched_counter.values())
+    if not matched_total:
+        print("  Trace validation FAILED: consumer output contained no touch worker PIDs")
         return False
 
-    print(f"  Trace validation PASSED: {len(consumed_keys)} consumed events matched initial touch input PIDs")
+    # inode_create is a system-wide LSM hook.  Daemons can legitimately create
+    # files while the test is attached, so unrelated PIDs are ambient input,
+    # not queue corruption.  Report them, but validate the worker-PID subset.
+    ambient_counter = consumed_counter - expected_counter
+    ambient_total = sum(ambient_counter.values())
+    suffix = f" (ignored {ambient_total} ambient system event(s))" if ambient_total else ""
+    print(f"  Trace validation PASSED: {matched_total} consumed events matched "
+          f"touch input PIDs{suffix}")
+    if ambient_counter:
+        print(f"    Ambient keys and counts: {dict(ambient_counter)}")
     print(f"  Trace output file: {trace_log_path}")
     return True
 
@@ -563,6 +574,17 @@ def main():
         print(f"\nRaw metrics CSV: {csv_path}")
 
     print_performance_ranking(results)
+
+    failed_results = [
+        result for result in results
+        if result['return_code'] != 0
+        or not result['trace_validation_ok']
+        or result['metrics'] is None
+    ]
+    if failed_results:
+        print(f"\nFAILED: {len(failed_results)} of {len(results)} relay run(s) "
+              "failed execution, trace validation, or metrics capture")
+        return 1
 
     return 0
 

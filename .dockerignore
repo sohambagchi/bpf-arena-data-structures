@@ -2,6 +2,7 @@
 # against the host's libelf would poison the container build.
 .output/
 build/
+kernel/build/
 *.o
 *.skel.h
 **/__pycache__/
