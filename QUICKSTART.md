@@ -13,7 +13,8 @@ You need kernel 6.10+ with `CONFIG_BPF_ARENA=y`.
 To get the toolchain instead of installing it piecemeal, `nix develop` gives you
 all of it in one shell (clang-20, gcc, python3, plus the kernel build tools).
 `DOCKER_NIX_INSTALL.md` covers installing Nix itself, or run
-`scripts/install-nix.sh`.
+`scripts/install-nix.sh`. For the Docker route instead, `scripts/install-docker.sh`
+(Ubuntu) does the same for Docker Engine.
 
 ## 2) Build
 

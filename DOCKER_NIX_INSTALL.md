@@ -5,7 +5,9 @@ the machine. This document is the part before that: getting Nix or Docker
 installed on a fresh system and configured so this repo's `nix develop` and
 `docker build` actually work.
 
-The Docker half is not written yet — see [Docker](#docker) at the end.
+Two independent halves: [Nix](#nix) and [Docker](#docker). You only need one.
+Each has a one-command script (`scripts/install-nix.sh`,
+`scripts/install-docker.sh`) and the same thing spelled out by hand underneath.
 
 ---
 
@@ -203,18 +205,263 @@ uninstall`.
 
 ## Docker
 
-Not written yet. For now use the upstream instructions —
-<https://docs.docker.com/engine/install/> for Linux, Docker Desktop at
-<https://docs.docker.com/desktop/> for macOS and Windows — and then
-`README.md`'s step 1:
+This section targets **Ubuntu** (22.04 jammy, 24.04 noble, 26.04 resolute, and
+Ubuntu-based derivatives), following
+<https://docs.docker.com/engine/install/ubuntu/> and
+<https://docs.docker.com/engine/install/linux-postinstall/>. For other
+distributions the shape is identical, only the repository differs —
+<https://docs.docker.com/engine/install/>.
+
+Before you start, two things worth knowing about this route: the container
+gives you the toolchain but not a kernel, so only the userspace half of the
+artifact runs under it (`README.md`'s FAQ, "Why does the BPF half not work
+under Docker?"), and the post-install step that lets a non-root user talk to
+the daemon (`usermod -aG docker $USER`) grants root-equivalent access on the
+host.
+
+### The one-command path
+
+From the repo root:
 
 ```bash
+./scripts/install-docker.sh
+```
+
+It removes the conflicting distro packages, adds Docker's apt repository and
+signing key, installs Engine + CLI + containerd + the buildx and compose
+plugins, enables the daemon, adds you to the `docker` group, and verifies the
+result with `docker run hello-world`. Like the Nix script, every step is
+skipped when it is already done, so it is safe to re-run. Useful flags:
+
+| flag | effect |
+| --- | --- |
+| `-y` | skip the script's own confirmation prompt |
+| `--dry-run` | print every command it would run, change nothing |
+| `--version 28.3.0` | pin a version instead of taking the newest |
+| `--suite noble` | force the Ubuntu suite (needed on some derivatives) |
+| `--no-group` | do not add anyone to the `docker` group; keep using `sudo docker` |
+| `--user NAME` | add someone other than the invoking user to the group |
+| `--convenience-script` | install via `get.docker.com` instead of the apt repository |
+| `--configure-only` | Docker is installed; only start the daemon, fix the group, verify |
+| `--no-hello-world` | skip the image pull at the end (no network) |
+
+Then:
+
+```bash
+git submodule update --init --recursive
 docker build -t bpf-arena-ds .
 docker run --rm -it -v "$PWD:/artifact" bpf-arena-ds
 ```
 
-Two things worth knowing before you go that route: the container gives you the
-toolchain but not a kernel, so only the userspace half of the artifact runs
-under it (`README.md`'s FAQ, "Why does the BPF half not work under Docker?"),
-and the post-install step that lets a non-root user talk to the daemon
-(`usermod -aG docker $USER`) grants root-equivalent access on the host.
+The rest of this section is the same thing by hand, plus what each step is for.
+
+### 1. Remove conflicting packages
+
+Ubuntu ships its own `docker.io`, and several unofficial packages own files
+that `docker-ce` also wants. Remove them first — this does **not** touch images
+or volumes under `/var/lib/docker`:
+
+```bash
+for pkg in docker.io docker-compose docker-compose-v2 docker-doc docker-buildx \
+           podman-docker containerd runc; do
+    sudo apt-get remove -y $pkg
+done
+```
+
+Also check for the snap, which upstream's instructions do not mention but which
+shadows `docker` on the PATH with its own daemon:
+
+```bash
+snap list docker 2>/dev/null && sudo snap remove docker
+```
+
+### 2. Add Docker's apt repository
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+sudo apt-get update
+```
+
+`Signed-By` scopes Docker's key to this one repository rather than trusting it
+for everything. The `UBUNTU_CODENAME:-VERSION_CODENAME` fallback matters on
+derivatives: Linux Mint's own `VERSION_CODENAME` is `xia`, which Docker does
+not publish; its `UBUNTU_CODENAME` is `noble`, which it does. Docker publishes
+`amd64`, `armhf`, `arm64`, `s390x` and `ppc64le`.
+
+If you followed older instructions before, delete the one-line
+`/etc/apt/sources.list.d/docker.list` — with `docker.sources` alongside it, apt
+sees the same repository twice and errors out.
+
+### 3. Install
+
+```bash
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
+     docker-buildx-plugin docker-compose-plugin
+```
+
+`docker-ce` is the daemon, `docker-ce-cli` the client, `containerd.io` the
+runtime underneath. **`docker-buildx-plugin` is not optional here:** this
+repo's `Dockerfile` starts with `# syntax=docker/dockerfile:1.7` and uses
+`RUN --mount=type=cache`, which the legacy builder cannot parse.
+
+To pin a version instead, list what the repository has and name it exactly:
+
+```bash
+apt-cache madison docker-ce | head           # or: apt list --all-versions docker-ce
+VERSION_STRING=5:28.3.0-1~ubuntu.24.04~noble
+sudo apt-get install -y docker-ce="$VERSION_STRING" docker-ce-cli="$VERSION_STRING" \
+     containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+### 4. Start the daemon
+
+The Ubuntu packages enable and start it already; this is the explicit form, and
+what to run if you are on an image where the postinst was masked:
+
+```bash
+sudo systemctl enable --now docker.service containerd.service
+systemctl is-active docker.service          # -> active
+```
+
+### 5. Non-root access
+
+```bash
+sudo groupadd docker                        # usually already created by the package
+sudo usermod -aG docker "$USER"
+newgrp docker                               # this shell only; otherwise log out and back in
+```
+
+**The `docker` group is root on this host.** The daemon runs as root and will
+bind-mount any path into a container, so anyone in the group can read or write
+anything. On a machine where that matters, skip this step and use `sudo docker`
+(`scripts/install-docker.sh --no-group`), or set up rootless mode —
+<https://docs.docker.com/engine/security/rootless/>.
+
+If you ran `sudo docker` before doing this, `~/.docker` is owned by root and
+the now-unprivileged client cannot write it:
+
+```bash
+sudo chown -R "$USER":"$USER" "$HOME/.docker"
+sudo chmod -R g+rwx "$HOME/.docker"
+```
+
+### 6. Verify
+
+```bash
+docker version                              # both Client and Server sections
+docker buildx version                       # required by this repo's Dockerfile
+docker run --rm hello-world
+```
+
+`docker version` printing only a `Client` section means the daemon is not
+running or you cannot reach its socket — the two failures step 4 and step 5
+address respectively.
+
+### 7. Use it
+
+```bash
+cd /path/to/bpf-arena-data-structures
+git submodule update --init --recursive     # the build copies third_party/ in
+docker build -t bpf-arena-ds .
+docker run --rm -it -v "$PWD:/artifact" bpf-arena-ds
+```
+
+The image's `CMD` is a shell, not the pipeline. Inside it you are root, so run
+`make` and then `python3 scripts/run_all.py` without `sudo`. The build's
+`verify` stage compiles the artifact and runs a userspace test, so a broken
+toolchain fails the build rather than the run.
+
+### Alternatives and special cases
+
+**Convenience script.** One command, no repository setup; upstream explicitly
+calls it unsuitable for production, but it is fine for a throwaway VM or a CI
+image. It configures the same apt repository behind the scenes:
+
+```bash
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh ./get-docker.sh --dry-run           # prints its plan
+sudo sh ./get-docker.sh
+```
+
+`scripts/install-docker.sh --convenience-script` takes this path and still does
+the group and verification steps afterwards.
+
+**Offline / air-gapped, from `.deb` files.** Download the five packages for
+your suite and architecture from
+<https://download.docker.com/linux/ubuntu/dists/> (under
+`<suite>/pool/stable/<arch>/`) and install them together so dependencies
+resolve:
+
+```bash
+sudo dpkg -i ./containerd.io_<version>_<arch>.deb \
+  ./docker-ce_<version>_<arch>.deb \
+  ./docker-ce-cli_<version>_<arch>.deb \
+  ./docker-buildx-plugin_<version>_<arch>.deb \
+  ./docker-compose-plugin_<version>_<arch>.deb
+sudo systemctl start docker
+```
+
+You still need base images, which the build pulls from Docker Hub — on a truly
+disconnected machine, `docker save`/`docker load` the `ubuntu:24.04` image and
+build with `--pull=false`.
+
+**Docker Desktop (macOS, Windows).** <https://docs.docker.com/desktop/>. The
+build works; the BPF half cannot, because the "host kernel" there is Docker's
+own LinuxKit VM rather than a kernel you control. Use the Nix path plus
+`nix run .#vm` if you need the relays to actually run.
+
+**WSL2.** Either install Docker Desktop on Windows and enable its WSL
+integration, or install Engine inside the distribution with the steps above. If
+you do the latter, the daemon needs systemd: `systemd=true` under `[boot]` in
+`/etc/wsl.conf`, then `wsl --shutdown` from Windows. Without it, start the
+daemon per session with `sudo service docker start`.
+
+**Rootless mode.** Removes the root-equivalent `docker` group at the cost of
+some isolation features. <https://docs.docker.com/engine/security/rootless/>.
+Fine for this artifact's build, which needs nothing privileged.
+
+**Firewall.** Published container ports (`-p`) are inserted ahead of `ufw`
+rules and bypass them. This repo's flow never publishes a port, so it does not
+come up here, but it surprises people on a shared host. Docker requires
+`iptables-nft` or `iptables-legacy`; pure `nft` rulesets are unsupported.
+
+### Troubleshooting
+
+| symptom | cause and fix |
+| --- | --- |
+| `permission denied while trying to connect to the Docker daemon socket` | step 5 was skipped, or the group is not in this shell yet — `newgrp docker`, or log out and back in |
+| `Cannot connect to the Docker daemon. Is the docker daemon running?` | step 4 — `sudo systemctl status docker.service`, then `journalctl -xeu docker.service` |
+| `the ... file is configured multiple times` from apt | both `docker.list` and `docker.sources` exist; delete the old `docker.list` |
+| `404 Not Found` on `download.docker.com/linux/ubuntu/dists/<name>` | the suite is your derivative's codename, not Ubuntu's — use `UBUNTU_CODENAME`, or `--suite noble` |
+| `NO_PUBKEY` / `signatures couldn't be verified` | `/etc/apt/keyrings/docker.asc` is missing or truncated; re-run step 2's `curl` |
+| `unknown flag: --mount` or a syntax error on the first `RUN` | buildx is missing (step 3) or `DOCKER_BUILDKIT=0` is set |
+| `docker: command not found` after installing | the `docker` snap was removed but its PATH entry lingers, or the install actually failed — `dpkg -l docker-ce-cli` |
+| the build works but the relays report `bpf(2)` failures | expected: the container has the host's kernel. `check_kconfig.py` is checking the *host*. See README.md's FAQ |
+| `no space left on device` mid-build | `/var/lib/docker` filled up — `docker system prune -a` |
+
+### Uninstalling
+
+```bash
+sudo apt-get purge -y docker-ce docker-ce-cli containerd.io \
+     docker-buildx-plugin docker-compose-plugin docker-ce-rootless-extras
+sudo rm -rf /var/lib/docker /var/lib/containerd
+sudo rm -f /etc/apt/sources.list.d/docker.sources /etc/apt/keyrings/docker.asc
+sudo groupdel docker                        # optional
+```
+
+`purge` leaves images, containers and volumes behind on purpose; the `rm -rf`
+is what actually deletes them, and it is not reversible.

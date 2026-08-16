@@ -73,8 +73,13 @@ both. The short version:
   <https://nixos.org/download/>, or the Determinate Systems installer at
   <https://github.com/DeterminateSystems/nix-installer>, which enables flakes
   for you. Needs Nix >= 2.27.
-- **Docker** — <https://docs.docker.com/engine/install/> (Linux), or Docker
-  Desktop at <https://docs.docker.com/desktop/>.
+- **Docker** — `scripts/install-docker.sh` installs Engine on Ubuntu from
+  Docker's own apt repository, enables the daemon, and puts you in the `docker`
+  group (which is root-equivalent — `--no-group` opts out). By hand, or for
+  another distribution: <https://docs.docker.com/engine/install/>, or Docker
+  Desktop at <https://docs.docker.com/desktop/> on macOS and Windows. The
+  buildx plugin is required; this repo's `Dockerfile` uses BuildKit cache
+  mounts.
 
 ### Step 2 — Build and install the kernel
 
@@ -340,6 +345,12 @@ The image's `CMD` is a shell, not the pipeline: run `make` and then
 userspace half is meaningful there — a container shares the host's kernel, so
 the relays run only if the *host* satisfies `check_kconfig.py`; see the
 [FAQ](#why-does-the-bpf-half-not-work-under-docker).
+
+Needs BuildKit with the buildx plugin (`# syntax=` and `RUN --mount=type=cache`
+above), and the submodules checked out. If Docker is not installed yet, run
+`scripts/install-docker.sh` on Ubuntu or see `DOCKER_NIX_INSTALL.md`, which
+also covers pinning a version, the `.deb` and offline routes, and why the
+`docker` group is worth thinking about before you join it.
 
 ### Building a kernel directly (`scripts/build-kernel.sh`)
 
