@@ -76,6 +76,10 @@ a metrics CSV. It runs the binaries from step 2 and compiles nothing; if they
 are missing it says so up front and names each one. `README.md` has the full
 walkthrough.
 
+In Docker, use `scripts/run-docker.sh -- python3 scripts/run_all.py` instead: a
+plain `docker run` cannot load BPF programs however root you are inside it, and
+the wrapper adds the capabilities and mounts it leaves out.
+
 ## Current state caveats
 
 - `scripts/test_smoke.sh`, `scripts/test_stress.sh`, `scripts/test_verify.sh`, and `scripts/benchmark.sh` are legacy templates and still reference older flags not used by current relay binaries.

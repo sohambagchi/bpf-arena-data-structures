@@ -32,6 +32,9 @@
 - `scripts/usertests.py` maintained test runner
 - `scripts/check_kconfig.py` kernel-config check; `scripts/build-kernel.sh`
   builds and installs the 6.18 reference kernel
+- `scripts/run-docker.sh` runs the pipeline in a BPF-capable container — the
+  privileges, mounts and PID namespace a plain `docker run` leaves out, plus a
+  host-kernel preflight (a container cannot supply a kernel)
 
 ## Important status note
 

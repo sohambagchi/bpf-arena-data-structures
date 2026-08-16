@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 
 TRACE_PIPE_PATH = "/sys/kernel/debug/tracing/trace_pipe"
 TRACE_CLEAR_PATH = "/sys/kernel/debug/tracing/trace"
+BTF_PATH = "/sys/kernel/btf/vmlinux"
 TRACE_CONSUME_RE = re.compile(r"consume key=(\d+) value=(\d+)")
 
 METRICS_HEADER_RE = re.compile(r"PERFORMANCE METRICS:\s*(.+?)\s*$")
@@ -25,6 +26,70 @@ METRICS_ROW_RE = re.compile(
     r"^(LKMM producer|User consumer|User producer|LKMM consumer)\s+"
     r"(\d+)\s+(\d+)\s+([\d.]+)%\s+(\d+)\s+(\d+)\s+(\d+)\s*$"
 )
+
+
+def in_container() -> bool:
+    """True when this process is running inside a container."""
+    if os.path.exists('/.dockerenv'):
+        return True
+    try:
+        with open('/proc/1/cgroup', encoding='utf-8') as cgroup_file:
+            return any(
+                marker in cgroup_file.read()
+                for marker in ('docker', 'containerd', 'libpod', 'kubepods')
+            )
+    except OSError:
+        return False
+
+
+def preflight() -> List[str]:
+    """Check what every relay needs, before spending a run finding out.
+
+    All eight relays fail the same way and for the same reason when the
+    environment is wrong -- not root, no BTF, no trace_pipe -- so without this
+    you watch the identical opaque failure eight times over ten seconds each.
+    Returns a list of problem descriptions; empty means good to go.
+    """
+    problems: List[str] = []
+
+    if hasattr(os, 'geteuid') and os.geteuid() != 0:
+        problems.append(
+            "not running as root; loading BPF programs and reading trace_pipe\n"
+            "    both need it:  sudo python3 scripts/runner.py"
+        )
+
+    if not os.path.exists(BTF_PATH):
+        problems.append(
+            f"no host BTF at {BTF_PATH}; the lsm.s and uprobe.s programs\n"
+            "    cannot attach without it. The running kernel needs\n"
+            "    CONFIG_DEBUG_INFO_BTF=y -- check with scripts/check_kconfig.py"
+        )
+
+    if not os.path.exists(TRACE_PIPE_PATH):
+        problems.append(
+            f"{TRACE_PIPE_PATH} does not exist; the relays report through\n"
+            "    bpf_printk() and trace validation reads it back. Mount debugfs:\n"
+            "    sudo mount -t debugfs none /sys/kernel/debug"
+        )
+    elif not os.access(TRACE_PIPE_PATH, os.R_OK):
+        problems.append(f"{TRACE_PIPE_PATH} is not readable by this process")
+
+    if os.path.exists(TRACE_CLEAR_PATH) and not os.access(TRACE_CLEAR_PATH, os.W_OK):
+        problems.append(
+            f"{TRACE_CLEAR_PATH} is not writable, so the trace buffer cannot be\n"
+            "    cleared between relays and validation would see stale events"
+        )
+
+    if problems and in_container():
+        problems.append(
+            "this is a container, and a plain `docker run` cannot run the relays:\n"
+            "    the seccomp profile blocks bpf(2), CAP_BPF/CAP_PERFMON are absent,\n"
+            "    and debugfs, bpffs, securityfs and /boot are not mounted.\n"
+            "    Start it with the wrapper instead, from the host:\n"
+            "    scripts/run-docker.sh -- python3 scripts/run_all.py"
+        )
+
+    return problems
 
 
 def find_executables() -> List[str]:
@@ -487,11 +552,30 @@ def main():
         default="build",
         help="Directory for the timestamped raw-metrics CSV (default: build)",
     )
+    parser.add_argument(
+        "--no-preflight",
+        action="store_true",
+        help="Run even if the environment checks (root, BTF, trace_pipe) fail",
+    )
     args = parser.parse_args()
 
     print("BPF Arena Data Structures Test Runner")
     print("=" * 60)
-    
+
+    problems = preflight()
+    if problems:
+        print("\n" + "!" * 60)
+        print("ENVIRONMENT CHECK FAILED -- the relays cannot run here")
+        print("!" * 60)
+        for problem in problems:
+            print(f"  - {problem}")
+        print("!" * 60)
+        if not args.no_preflight:
+            print("\nNothing was run. Override with --no-preflight to try anyway.")
+            return 1
+        print("\nContinuing anyway because --no-preflight was given.\n")
+
+
     executables = find_executables()
     
     if not executables:

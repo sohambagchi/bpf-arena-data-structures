@@ -61,8 +61,14 @@ nix develop                               # toolchain + kernel tools, repo in pl
 
 # Docker
 docker build -t bpf-arena-ds .
-docker run --rm -it -v "$PWD:/artifact" bpf-arena-ds
+docker run --rm -it -v "$PWD:/artifact" bpf-arena-ds   # toolchain only
+scripts/run-docker.sh                                  # ... plus BPF privileges
 ```
+
+The plain `docker run` gets you the compiler and the userspace tests; the
+relays need `scripts/run-docker.sh`, which adds the capabilities, mounts and
+PID namespace they depend on. Neither can substitute a kernel — see
+[Docker (`Dockerfile`)](#docker-dockerfile).
 
 If the tool is not installed, `DOCKER_NIX_INSTALL.md` has the full procedure for
 both. The short version:
@@ -340,16 +346,44 @@ Nix is not installed yet, or `nix develop` fails with "experimental Nix feature
 
 ### Docker (`Dockerfile`)
 
+There are two ways to run this image, and they do different amounts of the
+artifact. Pick by what you want out of it.
+
+**Toolchain only** — compiles the code and runs the userspace tests:
+
 ```bash
 docker build -t bpf-arena-ds .
 docker run --rm -it -v "$PWD:/artifact" bpf-arena-ds   # shell with the toolchain
 ```
 
 The image's `CMD` is a shell, not the pipeline: run `make` and then
-`python3 scripts/run_all.py` inside it (already root, so no `sudo`). Only the
-userspace half is meaningful there — a container shares the host's kernel, so
-the relays run only if the *host* satisfies `check_kconfig.py`; see the
-[FAQ](#why-does-the-bpf-half-not-work-under-docker).
+`python3 scripts/run_all.py --skip runner` inside it (already root, so no
+`sudo`). Build *inside* the container even if `build/` already looks populated
+— binaries built on the host are linked against the host's loader, and under
+Nix that is a `/nix/store` path the container does not have, so they die on
+"No such file or directory" at exec. The reverse costs you something too: a
+`make` in the container leaves root-owned objects in the bind-mounted `build/`
+and `.output/` that your host user can neither overwrite nor delete. Clean them
+from a container as well (`docker run --rm -v "$PWD:/artifact" bpf-arena-ds
+make clean`), or keep the two builds in separate checkouts.
+
+**BPF-capable** — also runs the eight relays:
+
+```bash
+scripts/run-docker.sh                                    # interactive shell
+scripts/run-docker.sh -- python3 scripts/run_all.py      # one-shot pipeline
+scripts/run-docker.sh --restricted -- python3 scripts/run_all.py
+```
+
+A plain `docker run` cannot do this, and being root inside the container does
+not help: the default seccomp profile blocks `bpf(2)` outright, `CAP_BPF` and
+`CAP_PERFMON` are not in the default set, and `/sys/kernel/debug`,
+`/sys/fs/bpf`, `/sys/kernel/security` and `/boot` are not mounted. The wrapper
+supplies all of them, shares the host PID namespace (so the PIDs the uprobes
+report match the ones `runner.py` compares against), and checks the *host*
+kernel first — a container shares it and cannot substitute one, so the relays
+run only where `check_kconfig.py` would pass on the host anyway. See the
+[FAQ](#why-does-the-bpf-half-not-work-under-docker) for what each flag buys.
 
 To build a kernel in the container too, add `-v /boot:/host/boot:ro` so
 `--base running` can reach the host's config, and pass `--no-install` — see
@@ -613,20 +647,46 @@ everything and reports at the end; `--only <stage>` re-runs one stage.
 
 A container shares the host's kernel; there is no such thing as a Docker image
 with Linux 6.18 inside it. So the relays run only against a compliant *host*
-kernel, and then only with:
+kernel, and then only if the container is started with the isolation opened up:
 
 ```bash
-docker run --rm -it --privileged --pid=host \
-  -v "$PWD:/artifact" \
-  -v /sys/kernel/debug:/sys/kernel/debug \
-  -v /sys/fs/bpf:/sys/fs/bpf \
-  bpf-arena-ds
+scripts/run-docker.sh -- python3 scripts/run_all.py
 ```
 
-`--privileged` is needed for CAP_BPF/CAP_PERFMON and because the default
-seccomp profile blocks `bpf(2)`. On Docker Desktop (macOS/Windows) it cannot
-work at all — the host "kernel" there is Docker's own LinuxKit VM. To get a
-6.18 kernel out of the Docker path, build one in the container with
+That wrapper exists because the plain `docker run -v "$PWD:/artifact"` from the
+setup section is missing four separate things, and root inside the container
+supplies none of them:
+
+| Missing | Symptom | What the wrapper does |
+| --- | --- | --- |
+| `CAP_BPF`, `CAP_PERFMON`, and seccomp blocking `bpf(2)` | programs will not load | `--privileged`, or `--restricted` |
+| `/sys/kernel/debug` | `trace_pipe` does not exist, so nothing to validate against | bind-mounts it read-write (the buffer is cleared between relays) |
+| `/sys/fs/bpf`, `/sys/kernel/security` | no bpffs; `check_kconfig.py` reports `[--] /sys/kernel/security/lsm unreadable; runtime LSM state unverified` and cannot confirm the BPF LSM is really active | bind-mounts both, securityfs read-only |
+| `/boot` | on a host without `CONFIG_IKCONFIG_PROC`, `check_kconfig.py` stops on "no config given and none found at /boot/config-$(uname -r) or /proc/config.gz" | bind-mounts it read-only |
+
+`--privileged` is the default. `--restricted` drops every capability and adds
+back the five that were each observed to be load-bearing here:
+
+- **`BPF`, `PERFMON`** — load the programs, open the perf events.
+- **`SYS_ADMIN`** — the documented `BPF`+`PERFMON` pair is *not* sufficient:
+  with only those two the programs load and attach then fails with
+  `failed to create uprobe '/proc/self/exe:0x8174' perf event: -EACCES`.
+- **`DAC_OVERRIDE`** — uid 0 in the container is not the owner of your
+  bind-mounted checkout; without it `runner.py`'s workers fail on
+  `touch: cannot touch 'file0.tmp': Permission denied` and no CSV is written.
+- **`SYS_RESOURCE`** — `RLIMIT_MEMLOCK`. Not needed on 6.18, where BPF memory
+  is memcg-accounted; kept for older kernels where that limit gates maps.
+
+Also note `--pid=host`: the uprobes report host PIDs, and `runner.py` validates
+the trace by matching them against the PIDs of the `touch` processes it spawned
+itself. In a private PID namespace those two numbering schemes disagree and
+every event looks ambient.
+
+On Docker Desktop (macOS/Windows) none of this can work — the host "kernel"
+there is Docker's own LinuxKit VM, not a kernel built from
+`kernel/configs/delta-bpf-arena.config`; the wrapper refuses to run on a
+non-Linux host rather than let you find out slowly. To get a 6.18 kernel out of
+the Docker path, build one in the container with
 `./scripts/build-kernel.sh --no-install` and boot it under QEMU; see the header
 comment in `Dockerfile`. The equivalent on the Nix side is `nix run .#vm`,
 which skips steps 2 and 3 entirely.

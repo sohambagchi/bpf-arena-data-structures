@@ -78,7 +78,12 @@ STAGE_HINTS = {
         "sudo python3 scripts/run_all.py --only runner\n"
         "  - It also needs debugfs mounted: "
         "sudo mount -t debugfs none /sys/kernel/debug\n"
-        "  - Confirm the kernel side first: python3 scripts/check_kconfig.py"
+        "  - Confirm the kernel side first: python3 scripts/check_kconfig.py\n"
+        "  - In Docker, a plain `docker run` cannot do this no matter how root\n"
+        "    you are inside it: seccomp blocks bpf(2), CAP_BPF/CAP_PERFMON are\n"
+        "    absent, and debugfs, bpffs, securityfs and /boot are unmounted. Start\n"
+        "    the container from the host with the wrapper that supplies all of\n"
+        "    them:  scripts/run-docker.sh -- python3 scripts/run_all.py"
     ),
 }
 
