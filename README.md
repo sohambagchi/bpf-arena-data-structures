@@ -1,121 +1,110 @@
 # BPF Arena Data Structures
 
-This repository tests lock-free data structures backed by `BPF_MAP_TYPE_ARENA` using a kernel->userspace->kernel relay flow.
+Lock-free data structures backed by `BPF_MAP_TYPE_ARENA`, measured with a
+kernel -> userspace -> kernel relay: a BPF program produces into a kernel->user
+lane on `lsm.s/inode_create`, a userspace thread relays into a user->kernel
+lane, and a uprobe-triggered kernel consumer drains it.
 
-Current focus: eight relay implementations, each with:
-- a BPF program that produces into a kernel->user lane on `lsm.s/inode_create`
-- a userspace relay thread that moves items into a user->kernel lane
-- a uprobe-triggered kernel consumer for the return lane
+Eight relays (`build/skeleton_*`), six of which also have a userspace-only
+pthread test (`build/usertest_*`):
 
-## What is implemented
+| Data structure | Header | Relay | Usertest |
+| --- | --- | --- | --- |
+| Michael-Scott queue | `include/ds_msqueue.h` | `skeleton_msqueue` | yes |
+| Vyukhov bounded MPMC | `include/ds_vyukhov.h` | `skeleton_vyukhov` | yes |
+| Folly SPSC ring | `include/ds_folly_spsc.h` | `skeleton_folly_spsc` | yes |
+| CK FIFO SPSC | `include/ds_ck_fifo_spsc.h` | `skeleton_ck_fifo_spsc` | yes |
+| CK ring SPSC | `include/ds_ck_ring_spsc.h` | `skeleton_ck_ring_spsc` | yes |
+| CK stack UPMC | `include/ds_ck_stack_upmc.h` | `skeleton_ck_stack_upmc` | yes |
+| io_uring-style ring | `include/ds_io_uring.h` | `skeleton_io_uring` | no |
+| kcov-style buffer | `include/ds_kcov.h` | `skeleton_kcov` | no |
 
-### Data structures
-- `include/ds_msqueue.h` (Michael-Scott queue)
-- `include/ds_vyukhov.h` (Vyukhov bounded MPMC queue)
-- `include/ds_folly_spsc.h` (Folly-style SPSC ring)
-- `include/ds_ck_fifo_spsc.h` (CK FIFO SPSC)
-- `include/ds_ck_ring_spsc.h` (CK ring SPSC)
-- `include/ds_ck_stack_upmc.h` (CK stack UPMC)
-- `include/ds_io_uring.h` (io_uring-style ring; models the design, does not call the syscall)
-- `include/ds_kcov.h` (kcov-style buffer; models the design, does not open `/sys/kernel/debug/kcov`)
+`io_uring` and `kcov` model those subsystems' memory layouts in the arena; they
+do not call into the real subsystems.
 
-### BPF relay apps
-- `build/skeleton_msqueue`
-- `build/skeleton_vyukhov`
-- `build/skeleton_folly_spsc`
-- `build/skeleton_ck_fifo_spsc`
-- `build/skeleton_ck_ring_spsc`
-- `build/skeleton_ck_stack_upmc`
-- `build/skeleton_io_uring`
-- `build/skeleton_kcov`
+## Reproducing the results
 
-### Userspace-only pthread tests
+Eight steps. Step 4 takes 20-60 minutes and needs ~22 GB free; step 5 reboots
+the machine.
 
-Six of the eight have a userspace-only counterpart:
+### 1. Pick your poison: Nix or Docker
 
-- `build/usertest_msqueue`
-- `build/usertest_vyukhov`
-- `build/usertest_folly_spsc`
-- `build/usertest_ck_fifo_spsc`
-- `build/usertest_ck_ring_spsc`
-- `build/usertest_ck_stack_upmc`
+Both give the same toolchain (clang-20, gcc, libelf, zlib, libbfd, libcap,
+python3) plus the kernel build tools. Differences that matter:
 
-## Running the artifact: five steps
-
-Steps 1–3 prepare the machine, step 4 builds the binaries, step 5 is the
-experiment. Step 2 takes 20–60 minutes and needs ~22 GB free, and step 3
-reboots the machine.
-
-Anything that does not go to plan is covered in the [FAQ](#faq) at the end.
-
-### Step 1 — Initialize the environment
-
-Both environments provide the toolchain (clang-20, gcc, libelf, zlib, libbpf,
-libbfd, libcap, python3). Pick one:
+- **Nix** runs everything, including the kernel build. Not on NixOS, which
+  manages kernels declaratively — use `nix build .#kernel` / `nix run .#vm`
+  there.
+- **Docker** compiles the code and runs the userspace tests, but a container
+  shares the host's kernel: the relays need the host to be running the kernel
+  from step 4, and they need `scripts/init-docker.sh`, which grants the
+  capabilities and mounts a plain `docker run` leaves out.
 
 ```bash
-git submodule update --init --recursive   # required by both
-
-# Nix
-nix develop                               # toolchain + kernel tools, repo in place
-
-# Docker
-docker build -t bpf-arena-ds .
-docker run --rm -it -v "$PWD:/artifact" bpf-arena-ds   # toolchain only
-scripts/run-docker.sh                                  # ... plus BPF privileges
+git submodule update --init --recursive    # required by both
 ```
 
-The plain `docker run` gets you the compiler and the userspace tests; the
-relays need `scripts/run-docker.sh`, which adds the capabilities, mounts and
-PID namespace they depend on. Neither can substitute a kernel — see
-[Docker (`Dockerfile`)](#docker-dockerfile).
+### 2. Install Nix or Docker
 
-If the tool is not installed, `DOCKER_NIX_INSTALL.md` has the full procedure for
-both. The short version:
+```bash
+./scripts/install-nix.sh        # installs Nix and enables flakes
+./scripts/install-docker.sh     # installs Docker Engine on Ubuntu
+```
 
-- **Nix** — `scripts/install-nix.sh` installs it and enables the flakes support
-  `nix develop` needs (a stock install has flakes off, so `nix develop` fails
-  until `experimental-features` is set). By hand:
-  <https://nixos.org/download/>, or the Determinate Systems installer at
-  <https://github.com/DeterminateSystems/nix-installer>, which enables flakes
-  for you. Needs Nix >= 2.27.
-- **Docker** — `scripts/install-docker.sh` installs Engine on Ubuntu from
-  Docker's own apt repository, enables the daemon, and puts you in the `docker`
-  group (which is root-equivalent — `--no-group` opts out). By hand, or for
-  another distribution: <https://docs.docker.com/engine/install/>, or Docker
-  Desktop at <https://docs.docker.com/desktop/> on macOS and Windows. The
-  buildx plugin is required; this repo's `Dockerfile` uses BuildKit cache
-  mounts.
+Both are re-runnable and skip what is already done. `DOCKER_NIX_INSTALL.md` has
+the manual steps.
 
-### Step 2 — Build and install the kernel
+### 3. Launch the environment
 
-One command downloads Linux 6.18.44, verifies its SHA-256, configures it with
-this repo's BPF fragment, builds it, and installs it as `6.18.44-bpf-arena`:
+```bash
+# Nix
+nix develop
+
+# Docker: build the image; the container itself is not needed until step 6,
+# because steps 4 and 5 are host operations
+docker build -t bpf-arena-ds .
+```
+
+### 4. Build and install kernel 6.18.44-bpf-arena
+
+Downloads Linux 6.18.44, verifies its SHA-256, merges
+`kernel/configs/delta-bpf-arena.config` into this machine's config, builds it,
+and installs it as `6.18.44-bpf-arena` alongside your current kernel:
 
 ```bash
 ./scripts/build-kernel.sh --base running -y
 ```
 
-Run it as a normal user — it requests `sudo` itself, and only for the install
-step. `--base running` starts from this machine's own config, which is what you
-want when booting the result on real hardware. Other flags:
+Run it as a normal user; it requests `sudo` only for the install step. It
+checks every dependency up front and names what is missing — see
+[Installing the dependencies by hand](#installing-the-dependencies-by-hand) if
+you are running it outside `nix develop` or the image.
 
-- `--base full` — the paper's reference `.config`
-  (`kernel/configs/full-6.18.2-bpf.config`), verbatim.
-- `--base defconfig` (default) — generic x86.
-- `--config PATH` — any other `.config` (or gzipped `config.gz`) as the base,
-  with the BPF fragment merged on top. `KERNEL_CONFIG=PATH` does the same. This
-  is the way to get `--base running` behaviour inside a container, which cannot
-  see the host's `/boot`; see
-  [below](#--base-running-does-not-work-inside-the-container).
-- `-y` — skip the confirmation prompt. `-j N` — parallelism (default: `nproc`).
-  `--no-install` — build only, touch nothing outside the tree.
+Other bases: `--base full` (the reference `.config` verbatim), `--base
+defconfig`, or `--config PATH`. Also `-j N`, `--no-install`.
 
-It checks every dependency up front, names the missing package for
-apt/dnf/pacman, and validates the generated `.config` with `check_kconfig.py`
-*before* the compile rather than after.
+On the Docker route, the container can do the *compile* — `--base full` and
+`--base defconfig` need nothing from the host, and `--base running` works if
+you bind-mount `/boot` — but it cannot install the result or reboot into it.
+Pass `--no-install` and finish from the host side of the bind mount:
 
-### Step 3 — Reboot
+```bash
+# host: not init-docker.sh, whose preflight wants the kernel you are about to build
+docker run --rm -it -v "$PWD:/artifact" -v /boot:/host/boot:ro bpf-arena-ds
+
+# container
+./scripts/build-kernel.sh --base running --no-install
+
+# host
+cd kernel/build/linux-6.18.44
+sudo make modules_install && sudo make install
+```
+
+That way the host needs only `make`, `kmod` and its usual boot tooling, not the
+full kernel toolchain. Building on the host instead is the simpler path if you
+already have those.
+
+### 5. Reboot
 
 Boot the `6.18.44-bpf-arena` entry, then confirm:
 
@@ -124,651 +113,143 @@ uname -r                        # 6.18.44-bpf-arena
 cat /sys/kernel/security/lsm    # must contain 'bpf'
 ```
 
-### Step 4 — Build
+If `bpf` is missing, the fix is a kernel command line change, not a rebuild:
+`python3 scripts/check_kconfig.py --print-lsm-fix` prints the `lsm=` line for
+this machine.
 
-Inside the environment from step 1, as your normal user:
+### 6. Launch the environment again
 
 ```bash
-make                         # 14 binaries into build/
+nix develop                      # Nix
+scripts/init-docker.sh           # Docker: checks the host kernel, then opens a
+                                 # shell in /artifact with BPF privileges
 ```
 
-This is a step of its own, not part of the pipeline below, and it must not be
-run under `sudo`. `sudo` resets the environment, so a build launched through it
-loses the dev shell's compiler settings — inside `nix develop` that means
-`NIX_CFLAGS_COMPILE` and `PKG_CONFIG_PATH`, and the compile then fails with
-`libelf.h: No such file or directory` even though the same `make` succeeds as
-your normal user. It also leaves root-owned objects in `build/` and `.output/`
-that the next unprivileged `make` cannot overwrite (recover with
-`sudo make clean`).
+### 7. Compile the data structures
 
-### Step 5 — Run the pipeline
+```bash
+make                            # 14 binaries into build/
+```
 
-One endpoint runs the kernel-config check, the userspace tests, and the relay
-experiment in order, against the binaries step 4 produced. It needs root: the
-relays load BPF programs and read `trace_pipe`.
+Build as your normal user, never under `sudo`: `sudo` resets the environment,
+so the dev shell's compiler settings are lost and the build fails on
+`libelf.h: No such file or directory`. If that already happened, recover with
+`sudo make clean`.
+
+### 8. Run them all
 
 ```bash
 sudo python3 scripts/run_all.py
 ```
 
-It builds nothing, and stops up front — naming each missing binary — if step 4
-has not been run.
+Runs three stages against the binaries from step 7 — kernel config check,
+userspace tests, then the eight relays — and ends with a ranking plus
+`build/runner_metrics_<timestamp>.csv` (one row per data structure and relay
+lane, plus an `ALL` aggregate). Exit status is 0 only if every stage passed.
 
-Expected output, abridged (the ops/sec figures below are illustrative
-formatting, not measurements from any particular machine — absolute numbers and
-the resulting order vary by hardware):
-
-```
-========================================================================
-BPF Arena Data Structures -- full pipeline
-========================================================================
-Repo root : /path/to/bpf-arena-data-structures
-Stages    : kconfig -> usertests -> runner
-On failure: stop
-
-========================================================================
-STAGE: kconfig
-$ python3 scripts/check_kconfig.py
-========================================================================
-Checking /boot/config-6.18.44-bpf-arena (2431 set, 1210 unset)
-  ...
-OK: all requirements met
-
-========================================================================
-STAGE: usertests
-$ python3 scripts/usertests.py --keep-going
-========================================================================
-  ...
-[usertest_msqueue] ok
-[usertest_vyukhov] ok
-[usertest_folly_spsc] ok
-[usertest_ck_fifo_spsc] ok
-[usertest_ck_ring_spsc] ok
-[usertest_ck_stack_upmc] ok
-
-========================================================================
-STAGE: runner
-$ python3 scripts/runner.py --csv-dir build
-========================================================================
-  ...
-  Trace validation PASSED: 1284 consumed events matched initial touch input PIDs
-  Aggregate throughput: 7,553,540 ops/sec over 3,915 successful ops
-  ...
-
-Raw metrics CSV: build/runner_metrics_20260814-113052.csv
-
-========================================================================
-PERFORMANCE RANKING (slowest first)
-========================================================================
-Ranked by aggregate successful ops/sec across all four relay stages
-(LKMM producer, user consumer, user producer, LKMM consumer).
-
- #  Data structure              Ops/sec  End-to-end(ns)     Ops-OK
- 1. MSQueue                     866,971           4,630      1,860
- 2. Vyukhov MPMC              1,204,318           3,322      2,140
- 3. KCOV Buffer               2,918,440           1,371      3,006
- 4. IO_URING Ring             3,344,102           1,196      3,171
- 5. CK Stack UPMC             4,010,775             997      3,288
- 6. CK FIFO SPSC              5,772,301             693      3,590
- 7. Folly SPSC                6,918,004             578      3,802
- 8. CK Ring SPSC              7,553,540             530      3,915
-
-Ascending performance order (slowest first):
-  MSQueue < Vyukhov MPMC < KCOV Buffer < IO_URING Ring < CK Stack UPMC < CK FIFO SPSC < Folly SPSC < CK Ring SPSC
-
-========================================================================
-PIPELINE SUMMARY
-========================================================================
-  [PASS] kconfig          0.1s
-  [PASS] usertests       38.3s
-  [PASS] runner          92.4s
-
-  Raw metrics CSV:
-    build/runner_metrics_20260814-113052.csv
-
-========================================================================
-==  PIPELINE PASSED
-==
-==  All 3 stage(s) completed successfully.
-========================================================================
-```
-
-Exit status is 0 only if every stage passed.
-
-The per-stage raw numbers — total ops, successful ops, average latency,
-summed successful latency, and throughput for each of the four relay lanes —
-land in `build/runner_metrics_<timestamp>.csv`, one row per
-(data structure, lane) plus an `ALL` aggregate row.
+Inside the Docker container you are already root, so drop the `sudo`.
 
 Useful variations:
 
 ```bash
-python3 scripts/run_all.py --dry-run            # print the stage commands only
 python3 scripts/run_all.py --only usertests     # one stage (repeatable)
-python3 scripts/run_all.py --skip kconfig
-python3 scripts/run_all.py --keep-going         # run every stage, report at end
-sudo python3 scripts/run_all.py --csv-dir results --show-output
+python3 scripts/run_all.py --skip runner
+sudo python3 scripts/run_all.py --keep-going    # do not stop at the first failure
 sudo python3 scripts/run_all.py skeleton_msqueue skeleton_ck_ring_spsc
 ```
 
-## Running a single relay by hand
+## Running one relay by hand
 
 ```bash
 sudo build/skeleton_msqueue -v
 ```
 
-In another shell while it runs, create files to trigger `inode_create` events:
+In another shell, create files to trigger `inode_create` events:
 
 ```bash
 touch /tmp/bpf-arena-relay-{1..20}
 ```
 
-On `Ctrl+C`, the app triggers its uprobe consumer and prints statistics.
+`Ctrl+C` triggers the uprobe consumer and prints the statistics table. All
+relays accept `-v` (verify both lanes on exit), `-s` (statistics, on by
+default) and `-h`.
 
-## CLI options
+## Installing the dependencies by hand
 
-All `build/skeleton_*` relay binaries support:
-- `-v` verify both lanes on exit
-- `-s` print stats (enabled by default)
-- `-h` show help
+`nix develop` and the Docker image already carry all of this. You need it only
+where you run a step outside them — in practice step 4, if you build the kernel
+on the host rather than in the container. The commands below are for Ubuntu.
 
-## Build and test
-
-`scripts/run_all.py` (step 5 above) wraps everything except the build. To drive
-the individual stages by hand:
+### To build the data structures (step 7)
 
 ```bash
-# Build everything into build/
-make
+sudo apt-get update
+sudo apt-get install -y \
+    build-essential pkg-config git python3 \
+    libelf-dev zlib1g-dev
+```
 
-# Build only userspace pthread tests
-make usertest
+`build-essential` supplies gcc and make; `pkg-config` is how libbpf finds
+libelf and zlib; `libelf` and `zlib` are also what the relays link against.
 
-# Run all userspace tests and validate output
-python3 scripts/usertests.py --build
+Then Clang with BPF target support. The Makefile wants `clang-20` and falls
+back to `clang`, so Ubuntu's own package works if it is recent enough:
 
-# List detected usertests
-python3 scripts/usertests.py --list
+```bash
+sudo apt-get install -y clang
+```
 
-# Run the eight relays, rank them, and write the metrics CSV
-sudo python3 scripts/runner.py
+To install LLVM 20 from upstream instead:
+
+```bash
+sudo apt-get install -y ca-certificates curl gnupg lsb-release \
+    software-properties-common                       # what llvm.sh needs
+curl -fsSL https://apt.llvm.org/llvm.sh -o llvm.sh
+chmod +x llvm.sh
+sudo ./llvm.sh 20
+```
+
+### To build the kernel (step 4)
+
+Everything above, plus:
+
+```bash
+sudo apt-get install -y \
+    bison flex bc kmod dwarves libssl-dev libncurses-dev \
+    rsync cpio perl tar xz-utils zstd gzip file curl
+```
+
+`dwarves` provides `pahole`, which generates the BTF that
+`CONFIG_DEBUG_INFO_BTF=y` needs — without it the relays cannot attach.
+`libncurses-dev` is only for `make menuconfig`, which you need if you ever have
+to fix the generated `.config` by hand.
+
+### For a full `bpftool` (optional)
+
+Not needed by `make`, which builds only `bpftool bootstrap` — the minimal host
+build used to emit skeletons. These matter if you want to build the complete
+`bpftool` from `third_party/bpftool`, whose Makefile silently drops features
+when they are absent: JIT disassembly (`bpftool prog dump jited`) without
+`libbfd`, and the capability half of `bpftool feature probe` without `libcap`.
+
+```bash
+sudo apt-get install -y binutils-dev libcap-dev llvm-dev
+```
+
+bpftool looks for an *unversioned* `llvm-config`, which Ubuntu's `llvm-dev`
+provides but `apt.llvm.org` does not. If you installed LLVM 20 from upstream,
+put its bin directory on `PATH`:
+
+```bash
+export PATH="$PATH:/usr/lib/llvm-20/bin"
 ```
 
 ## Repository layout
 
-- `include/` data structure headers, common API, arena atomics
+- `include/` data structure headers, arena API, metrics
 - `src/` BPF relay pairs (`skeleton_*.bpf.c` + `skeleton_*.c`)
 - `usertest/` userspace-only pthread tests
-- `scripts/` `run_all.py` (pipeline endpoint), `check_kconfig.py`,
-  `build-kernel.sh`, `runner.py`, `usertests.py`, plus legacy shell templates
-- `docs/` architecture notes, LKMM notes, and design docs
-
-## Reproducible environments
-
-Two packaged environments cover the toolchain.
-
-### Nix (`flake.nix`)
-
-```bash
-nix develop                  # one shell: clang-20, gcc, libelf, zlib, openssl,
-                             # libbfd/libopcodes, libcap, python3, plus
-                             # bison/flex/bc/pahole/QEMU for the kernel step
-
-make                         # builds into build/
-
-nix build .#artifact         # same 14 binaries, hermetically
-nix build .#kernel           # Linux 6.18 from kernel/configs/full-6.18.2-bpf.config
-nix run .#vm                 # boot that kernel in QEMU, repo mounted at /repo
-nix flake check              # builds the artifact + validates the reference .config
-```
-
-`nix develop` is a single shell that covers every step, `scripts/build-kernel.sh`
-included — there is no separate kernel shell to remember (`.#kernel` still
-resolves, as an alias for the default). The one thing kept out of it is
-`nix run .#vm`, which is a booted machine rather than a set of tools: it builds
-`full-6.18.2-bpf.config` against the 6.18 source, boots it under QEMU with
-`lsm=...,bpf` on the command line, and drops you at a root shell with your
-checkout at `/repo`. That is the only environment here that gives you the
-paper's kernel at runtime.
-
-Run `make` on the host, in `nix develop`, before booting it. The guest shares
-the host's Nix store and mounts the repo, so `build/` is already populated and
-its binaries run there; but a NixOS system environment installs no `-dev`
-outputs, so building *inside* the guest fails on `libelf.h` the same way a
-build under `sudo` does. Inside the VM, run
-`cd /repo && python3 scripts/run_all.py` (already root).
-
-Needs Nix >= 2.27 with flakes enabled (`inputs.self.submodules` pulls in
-`third_party/`), and `git submodule update --init --recursive` beforehand. If
-Nix is not installed yet, or `nix develop` fails with "experimental Nix feature
-'nix-command' is disabled", see `DOCKER_NIX_INSTALL.md` — or run
-`scripts/install-nix.sh`, which does the whole install-and-enable-flakes dance.
-
-### Docker (`Dockerfile`)
-
-There are two ways to run this image, and they do different amounts of the
-artifact. Pick by what you want out of it.
-
-**Toolchain only** — compiles the code and runs the userspace tests:
-
-```bash
-docker build -t bpf-arena-ds .
-docker run --rm -it -v "$PWD:/artifact" bpf-arena-ds   # shell with the toolchain
-```
-
-The image's `CMD` is a shell, not the pipeline: run `make` and then
-`python3 scripts/run_all.py --skip runner` inside it (already root, so no
-`sudo`). Build *inside* the container even if `build/` already looks populated
-— binaries built on the host are linked against the host's loader, and under
-Nix that is a `/nix/store` path the container does not have, so they die on
-"No such file or directory" at exec. The reverse costs you something too: a
-`make` in the container leaves root-owned objects in the bind-mounted `build/`
-and `.output/` that your host user can neither overwrite nor delete. Clean them
-from a container as well (`docker run --rm -v "$PWD:/artifact" bpf-arena-ds
-make clean`), or keep the two builds in separate checkouts.
-
-**BPF-capable** — also runs the eight relays:
-
-```bash
-scripts/run-docker.sh                                    # interactive shell
-scripts/run-docker.sh -- python3 scripts/run_all.py      # one-shot pipeline
-scripts/run-docker.sh --restricted -- python3 scripts/run_all.py
-```
-
-A plain `docker run` cannot do this, and being root inside the container does
-not help: the default seccomp profile blocks `bpf(2)` outright, `CAP_BPF` and
-`CAP_PERFMON` are not in the default set, and `/sys/kernel/debug`,
-`/sys/fs/bpf`, `/sys/kernel/security` and `/boot` are not mounted. The wrapper
-supplies all of them, shares the host PID namespace (so the PIDs the uprobes
-report match the ones `runner.py` compares against), and checks the *host*
-kernel first — a container shares it and cannot substitute one, so the relays
-run only where `check_kconfig.py` would pass on the host anyway. See the
-[FAQ](#why-does-the-bpf-half-not-work-under-docker) for what each flag buys.
-
-To build a kernel in the container too, add `-v /boot:/host/boot:ro` so
-`--base running` can reach the host's config, and pass `--no-install` — see
-[the FAQ entry](#--base-running-does-not-work-inside-the-container).
-
-Needs BuildKit with the buildx plugin (`# syntax=` and `RUN --mount=type=cache`
-above), and the submodules checked out. If Docker is not installed yet, run
-`scripts/install-docker.sh` on Ubuntu or see `DOCKER_NIX_INSTALL.md`, which
-also covers pinning a version, the `.deb` and offline routes, and why the
-`docker` group is worth thinking about before you join it.
-
-### Building a kernel directly (`scripts/build-kernel.sh`)
-
-This is step 2 above. It installs as `6.18.44-bpf-arena`, so nothing already on
-the system is overwritten, and the existing kernel remains bootable.
-
-## Requirements
-
-- Linux kernel 6.10+, configured per `kernel/configs/delta-bpf-arena.config` (below)
-- Clang/LLVM with BPF target support (the Makefile defaults to `clang-20`, with fallback to `clang`)
-- `libelf`, `zlib`, `gcc`, `make`
-- LLVM development files, `libbfd` (plus `libopcodes`) and `libcap` — not needed
-  by `make`, needed for a full `bpftool`; see [below](#libbfd-and-libcap)
-- root privileges for loading/attaching BPF programs
-
-For a fast setup path, see `QUICKSTART.md`.
-
-### Installing them by hand
-
-`nix develop` and the Docker image already carry all of this. To install on the
-host instead:
-
-| | Debian/Ubuntu | Fedora/RHEL | Arch |
-| --- | --- | --- | --- |
-| libelf | `libelf-dev` | `elfutils-libelf-devel` | `libelf` |
-| zlib | `zlib1g-dev` | `zlib-devel` | `zlib` |
-| OpenSSL | `libssl-dev` | `openssl-devel` | `openssl` |
-| libbfd + libopcodes | `binutils-dev` | `binutils-devel` | `binutils` |
-| libcap | `libcap-dev` | `libcap-devel` | `libcap` |
-| LLVM (`llvm-config`) | `llvm-dev` | `llvm-devel` | `llvm` |
-
-```bash
-# Debian/Ubuntu
-sudo apt-get install -y build-essential pkg-config \
-    libelf-dev zlib1g-dev libssl-dev binutils-dev libcap-dev llvm-dev
-
-# Fedora/RHEL
-sudo dnf install -y gcc make pkgconf-pkg-config \
-    elfutils-libelf-devel zlib-devel openssl-devel binutils-devel libcap-devel \
-    llvm-devel
-
-# Arch
-sudo pacman -S --needed base-devel pkgconf \
-    libelf zlib openssl binutils libcap llvm
-```
-
-Arch ships `bfd.h` and `sys/capability.h` in the runtime packages; Debian and
-Fedora split them into the `-dev`/`-devel` packages above. Distribution `llvm-dev`
-packages provide an unversioned `llvm-config`; the versioned ones from
-`apt.llvm.org` do not, which is what the `Dockerfile`'s `PATH` entry works
-around.
-
-`scripts/build-kernel.sh` checks its own dependencies before it starts and names
-the missing package for apt/dnf/pacman, so the kernel step needs no list kept in
-sync with this one.
-
-#### libbfd and libcap
-
-Neither is needed to run `make`. This repo's Makefile builds `bpftool bootstrap`
-— the minimal host build used only to emit skeletons — and that links neither.
-They matter when you build the *full* `bpftool` from `third_party/bpftool`.
-Upstream's Makefile feature-tests both and, when they are absent, drops the
-dependent features silently rather than failing the build, so the result is a
-`bpftool` quietly missing:
-
-- `bpftool prog dump jited` — JIT disassembly, from LLVM, or from `libbfd` and
-  `libopcodes` as the fallback
-- the capability half of `bpftool feature probe` — from `libcap`
-
-Those two are the usual first stop when a program loads on one machine and not
-another, which is why both packaged environments carry them rather than leaving
-them to be discovered mid-debug. `libcap` also brings `setcap`, if you would
-rather grant a relay `CAP_BPF`/`CAP_PERFMON` than run it as root.
-
-The `make` output starts with bpftool's own feature table, which is where you
-see what it found:
-
-```
-...                        libbfd: [ on  ]
-...               clang-bpf-co-re: [ on  ]
-...                          llvm: [ on  ]
-...                        libcap: [ on  ]
-```
-
-`llvm` is the one that takes an extra step in each environment, because bpftool
-looks for an *unversioned* `llvm-config` (and `llvm-strip`, for the full build).
-`apt.llvm.org` installs only `llvm-config-20`, so the `Dockerfile` appends
-`/usr/lib/llvm-20/bin` — where the unversioned names live — to `PATH`. In
-nixpkgs `llvm-config` sits in the `dev` output, so the flake asks for
-`llvmPackages_20.llvm.dev` explicitly; the plain `llvm` package has `clang` and
-`llvm-strip` but not `llvm-config`. Either way the fix costs nothing: the
-headers and `libLLVM` were already installed in both.
-
-An `llvm: [ OFF ]` line does not affect anything this repo builds — `bpftool
-bootstrap` excludes `jit_disasm.c` — so it is only worth chasing if you want a
-full `bpftool` out of the environment.
-
-Note that `bfd.h` refuses to be included on its own — `#error config.h must be
-included before this header`. bpftool's own `-DPACKAGE='"bpftool"'` satisfies
-that guard; anything else including it directly has to define `PACKAGE` too.
-
-## Kernel configuration
-
-Check whether the running kernel already works:
-
-```bash
-python3 scripts/check_kconfig.py            # reads /boot/config-$(uname -r)
-python3 scripts/check_kconfig.py path/to/.config
-```
-
-It exits non-zero and names what is missing. To build a kernel that
-satisfies it, merge the fragment with the kernel's own tooling:
-
-```bash
-cd /path/to/linux
-./scripts/kconfig/merge_config.sh -m .config \
-    /path/to/bpf-arena-data-structures/kernel/configs/delta-bpf-arena.config
-make olddefconfig
-```
-
-Or install the fragment into the kernel tree and use the built-in target:
-
-```bash
-cp kernel/configs/delta-bpf-arena.config \
-    /path/to/linux/kernel/configs/bpf-arena.config
-cd /path/to/linux && make bpf-arena.config
-```
-
-## FAQ
-
-### Can I skip steps 2 and 3?
-
-Yes, if the kernel you are already running satisfies the requirements. Check
-before spending an hour on a kernel build:
-
-```bash
-python3 scripts/check_kconfig.py
-```
-
-If it prints `OK: all requirements met`, go straight to step 4.
-
-### `make` fails on `libelf.h: No such file or directory`
-
-Almost always because the build ran under `sudo`. `sudo` resets the environment
-(`env_reset`), and the dev shell carries its compiler settings in environment
-variables rather than in the compiler binary:
-
-- inside `nix develop`, `NIX_CFLAGS_COMPILE` is what puts elfutils' and zlib's
-  `include/` on the search path, and `PKG_CONFIG_PATH` is what lets libbpf's
-  `pkg-config --cflags libelf zlib` find them. `sudo` drops both. `PATH`
-  usually survives, so `make`, `gcc` and `clang` are still the dev shell's —
-  which is why the build starts normally and then dies on the first
-  `#include <libelf.h>`.
-- the same shape of failure applies to `CLANG_BPF_SYS_INCLUDES` (set by the
-  flake's `shellHook`) and to `CC`/`CLANG`.
-
-Build as your normal user (step 4) and let `sudo` apply only to the pipeline
-(step 5), which needs it. `sudo python3 scripts/run_all.py` no longer builds
-anything, so this cannot recur through it.
-
-If a root build already happened, `build/` and `.output/` hold root-owned
-objects that an unprivileged `make` cannot overwrite:
-
-```bash
-sudo make clean
-make
-```
-
-`sudo -E make` is not the fix: whether `-E` is even permitted depends on the
-sudoers policy, and it preserves the variables while still running the compiler
-as root, so you get the root-owned objects anyway.
-
-The same error, without `sudo`, means the headers are genuinely absent: you are
-outside `nix develop`, or inside the `nix run .#vm` guest, whose system
-environment installs no `-dev` outputs. Build on the host and run the binaries
-in the guest — the store is shared, so they run there unchanged. The Docker
-image is unaffected; `libelf-dev` is installed in it the ordinary way.
-
-### `bpf` is missing from `/sys/kernel/security/lsm`
-
-Then the `lsm.s/inode_create` producer cannot attach and every relay fails.
-`/sys/kernel/security/lsm` is what the kernel *actually* activated, and it is
-not always what `CONFIG_LSM` says: an `lsm=` kernel command line replaces that
-list outright. Fixing it is a command line change plus a reboot — no second
-kernel build.
-
-`check_kconfig.py` detects this and prints the exact line to set:
-
-```bash
-python3 scripts/check_kconfig.py --print-lsm-fix
-```
-
-It reads this machine's state rather than emitting a canned string, which
-matters: **`lsm=` replaces the compiled-in list — it does not add to it.**
-A short list silently disables every LSM you left out (AppArmor on Ubuntu,
-SELinux on Fedora), so the fix starts from the list already in effect — the
-`lsm=` line if your bootloader pins one, otherwise `CONFIG_LSM` — and appends
-`,bpf`. The output also names where to put it for GRUB, grubby, systemd-boot,
-and NixOS.
-
-The kernel this repo builds already lists `bpf` in `CONFIG_LSM`, so you only
-hit this on a distro kernel, or if your bootloader pins its own `lsm=` line.
-
-After rebooting, `capability` and `ima` may appear in the active list without
-being on your command line. That is normal and not a sign the setting was
-ignored.
-
-### `check_kconfig.py` passes but the relays still fail to attach
-
-Run it against the *running* kernel rather than a config file. Given a path it
-does text analysis only; given no argument it also checks runtime state
-(the LSM list above) and says `[config text only]` in the header when it
-cannot. `--runtime` forces the runtime check on.
-
-Also confirm `/sys/kernel/btf/vmlinux` exists: `CONFIG_DEBUG_INFO_BTF=y` is a
-*runtime* requirement, not just a build one. libbpf reads it to attach the
-BTF-typed programs even though `third_party/vmlinux.h` is checked in.
-
-### The new kernel does not appear in the boot menu
-
-Regenerate it, then reboot:
-
-```bash
-sudo update-grub                              # Debian/Ubuntu
-sudo grubby --info=ALL                        # Fedora/RHEL (verify the entry)
-sudo grub-mkconfig -o /boot/grub/grub.cfg     # Arch
-```
-
-### The new kernel does not boot
-
-Boot your previous kernel — it is untouched, and the new one installs under a
-distinct `6.18.44-bpf-arena` name specifically so it cannot displace it.
-
-The usual cause is `--base defconfig`, which is generic x86 and may omit the
-storage or filesystem drivers your root device needs. Rebuild with
-`--base running`, which starts from your machine's working config.
-
-### A pipeline stage failed — what do I get?
-
-A boxed `STAGE FAILED` banner naming the command, exit status, the last 20
-lines of that stage's output, and the fix to try; the failure is repeated at
-the bottom of the summary so it survives a long scrollback. The stages that
-did not run because of it are listed too.
-
-By default the pipeline stops at the first failure, since each stage depends on
-the ones before it — an unmet kernel config makes the relays unattachable, and
-a failing usertest makes their numbers meaningless. `--keep-going` runs
-everything and reports at the end; `--only <stage>` re-runs one stage.
-
-### Why does the BPF half not work under Docker?
-
-A container shares the host's kernel; there is no such thing as a Docker image
-with Linux 6.18 inside it. So the relays run only against a compliant *host*
-kernel, and then only if the container is started with the isolation opened up:
-
-```bash
-scripts/run-docker.sh -- python3 scripts/run_all.py
-```
-
-That wrapper exists because the plain `docker run -v "$PWD:/artifact"` from the
-setup section is missing four separate things, and root inside the container
-supplies none of them:
-
-| Missing | Symptom | What the wrapper does |
-| --- | --- | --- |
-| `CAP_BPF`, `CAP_PERFMON`, and seccomp blocking `bpf(2)` | programs will not load | `--privileged`, or `--restricted` |
-| `/sys/kernel/debug` | `trace_pipe` does not exist, so nothing to validate against | bind-mounts it read-write (the buffer is cleared between relays) |
-| `/sys/fs/bpf`, `/sys/kernel/security` | no bpffs; `check_kconfig.py` reports `[--] /sys/kernel/security/lsm unreadable; runtime LSM state unverified` and cannot confirm the BPF LSM is really active | bind-mounts both, securityfs read-only |
-| `/boot` | on a host without `CONFIG_IKCONFIG_PROC`, `check_kconfig.py` stops on "no config given and none found at /boot/config-$(uname -r) or /proc/config.gz" | bind-mounts it read-only |
-
-`--privileged` is the default. `--restricted` drops every capability and adds
-back the five that were each observed to be load-bearing here:
-
-- **`BPF`, `PERFMON`** — load the programs, open the perf events.
-- **`SYS_ADMIN`** — the documented `BPF`+`PERFMON` pair is *not* sufficient:
-  with only those two the programs load and attach then fails with
-  `failed to create uprobe '/proc/self/exe:0x8174' perf event: -EACCES`.
-- **`DAC_OVERRIDE`** — uid 0 in the container is not the owner of your
-  bind-mounted checkout; without it `runner.py`'s workers fail on
-  `touch: cannot touch 'file0.tmp': Permission denied` and no CSV is written.
-- **`SYS_RESOURCE`** — `RLIMIT_MEMLOCK`. Not needed on 6.18, where BPF memory
-  is memcg-accounted; kept for older kernels where that limit gates maps.
-
-Also note `--pid=host`: the uprobes report host PIDs, and `runner.py` validates
-the trace by matching them against the PIDs of the `touch` processes it spawned
-itself. In a private PID namespace those two numbering schemes disagree and
-every event looks ambient.
-
-On Docker Desktop (macOS/Windows) none of this can work — the host "kernel"
-there is Docker's own LinuxKit VM, not a kernel built from
-`kernel/configs/delta-bpf-arena.config`; the wrapper refuses to run on a
-non-Linux host rather than let you find out slowly. To get a 6.18 kernel out of
-the Docker path, build one in the container with
-`./scripts/build-kernel.sh --no-install` and boot it under QEMU; see the header
-comment in `Dockerfile`. The equivalent on the Nix side is `nix run .#vm`,
-which skips steps 2 and 3 entirely.
-
-### `--base running` does not work inside the container
-
-A container shares the host's kernel but not its filesystem, so `uname -r` names
-the host kernel while `/boot/config-$(uname -r)` — the file `--base running`
-wants — is not mounted. Three ways out, in the order the script suggests them:
-
-```bash
-# 1. mount the host's /boot; --base running then finds it at /host/boot by itself
-docker run --rm -it -v "$PWD:/artifact" -v /boot:/host/boot:ro bpf-arena-ds
-
-# 2. copy the config in and point at it
-cp "/boot/config-$(uname -r)" ./host.config              # on the host
-./scripts/build-kernel.sh --config ./host.config \
-    --no-install                                         # in the container
-
-# 3. use a config that needs nothing from the host
-./scripts/build-kernel.sh --base full --no-install
-```
-
-`--base running` also still works untouched if the *host* kernel was built with
-`CONFIG_IKCONFIG_PROC=y`: `/proc/config.gz` is the running kernel's own config
-and is visible in the container, since `/proc` is the same kernel's procfs. The
-script checks it before giving up.
-
-Installing is a host operation regardless of the config — `make modules_install
-install` inside a container writes into `/lib/modules` and `/boot` that are
-discarded when it exits, and a container cannot reboot the host into the result.
-So `build-kernel.sh` refuses to install from inside one unless both directories
-are bind-mounted from the host (`-v /boot:/boot -v /lib/modules:/lib/modules`).
-Pass `--no-install`, then either install from the host side of the bind mount:
-
-```bash
-cd kernel/build/linux-6.18.44 && sudo make modules_install && sudo make install
-```
-
-or skip installing entirely and boot the `bzImage` under QEMU.
-
-### `build-kernel.sh` refuses to install on NixOS
-
-By design: NixOS manages kernels declaratively and has no writable `/boot`
-layout for `make install` to use. Use `nix build .#kernel`, or `nix run .#vm`
-to boot the reference kernel under QEMU.
-
-### `build-kernel.sh` exited with a number — what does it mean?
-
-Every failure has a documented exit code and the table is at the top of the
-script (1 usage, 2 unsupported platform, 3 missing dependency, 4 disk space,
-5 download/checksum, 6 extract, 7 configuration, 8 config does not satisfy the
-artifact, 9 compile, 10 install).
-
-### Is there a `CONFIG_BPF_ARENA`?
-
-No. Arena support follows from `CONFIG_BPF_SYSCALL` on any 64-bit MMU arch —
-upstream `kernel/bpf/Makefile` gates `arena.o` on `MMU && 64BIT` plus
-`BPF_SYSCALL`. Earlier revisions of this README told you to look for a menu
-entry that does not exist.
-
-### Do I need `CONFIG_KCOV` and `CONFIG_IO_URING`?
-
-No. The `kcov` and `io_uring` skeletons are arena rings modeled on those
-subsystems' designs; neither calls into the real subsystem. They are in the
-fragment so one kernel can also host comparisons against the genuine article.
-
-If you do enable `CONFIG_KCOV` for that, leave `CONFIG_KCOV_INSTRUMENT_ALL`
-off — it instruments every kernel function and will skew the `ds_metrics`
-latency and throughput numbers.
-
-### Why do only six of the eight have userspace tests?
-
-The `io_uring` and `kcov` skeletons exist only as arena relays; there is no
-pthread-only counterpart for them. `scripts/usertests.py --list` prints what is
-actually detected, read from `USERTEST_APPS` in the Makefile.
-
-### What about the older scripts and docs?
-
-- The project no longer contains list/BST/bintree/mpsc skeleton apps.
-- Shell scripts in `scripts/test_*.sh` and `scripts/benchmark.sh` are legacy
-  templates and still mention older CLI flags (`-t`, `-o`, `-w`).
-- The automated entrypoint today is `scripts/run_all.py`, which orchestrates
-  `check_kconfig.py`, `usertests.py`, and `runner.py`. `make` is a separate
-  step you run first, unprivileged.
+- `scripts/` install, kernel build, kernel config check, and the pipeline
+- `kernel/configs/` the BPF fragment and the reference `.config`
+- `docs/` architecture, memory-ordering and design notes
+- `flake.nix`, `Dockerfile` the two packaged environments

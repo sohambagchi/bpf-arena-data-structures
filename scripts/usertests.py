@@ -40,19 +40,10 @@ def parse_makefile_usertest_apps(makefile: Path) -> list[str] | None:
 
 
 def default_apps() -> list[str]:
-	root = repo_root()
-	apps = parse_makefile_usertest_apps(root / "Makefile")
-	if apps:
-		return apps
-	return [
-		"usertest_list",
-		"usertest_msqueue",
-		"usertest_mpsc",
-		"usertest_vyukhov",
-		"usertest_folly_spsc",
-		"usertest_bst",
-		"usertest_bintree",
-	]
+	apps = parse_makefile_usertest_apps(repo_root() / "Makefile")
+	if not apps:
+		raise SystemExit("error: no USERTEST_APPS line in the Makefile")
+	return apps
 
 
 @dataclass(frozen=True)
@@ -163,13 +154,12 @@ def run_one(app: str, *, timeout_sec: int, verbose: bool) -> tuple[int, str]:
 
 def main(argv: list[str]) -> int:
 	parser = argparse.ArgumentParser(description="Run all userspace pthread usertests and validate output.")
-	parser.add_argument("apps", nargs="*", help="Optional app names (e.g. usertest_mpsc usertest_vyukhov)")
+	parser.add_argument("apps", nargs="*", help="Optional app names (e.g. usertest_msqueue usertest_vyukhov)")
 	parser.add_argument("--list", action="store_true", help="List detected usertest apps and exit")
 	parser.add_argument("--build", action="store_true", help="Run `make usertest` before executing")
 	parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SEC, help="Per-test timeout seconds")
 	parser.add_argument("--keep-going", action="store_true", help="Continue running remaining tests after a failure")
-	parser.add_argument("--quiet", action="store_true", help="Suppress test program output (only print pass/fail)")
-	parser.add_argument("-v", "--verbose", action="store_true", help="Verbose runner output (prints commands, extra details)")
+	parser.add_argument("-v", "--verbose", action="store_true", help="Print each test's output, not only failures'")
 	args = parser.parse_args(argv)
 
 	apps = [normalize_app(a) for a in (args.apps or default_apps())]
@@ -196,12 +186,6 @@ def main(argv: list[str]) -> int:
 				break
 			continue
 
-		if not args.quiet:
-			sys.stdout.write(f"\n===== {app} (rc={rc}) =====\n")
-			sys.stdout.write(out)
-			if not out.endswith("\n"):
-				sys.stdout.write("\n")
-
 		parsed = parse_output(out)
 
 		ok = True
@@ -223,6 +207,9 @@ def main(argv: list[str]) -> int:
 				ok = False
 			elif not multiset_eq(parsed.produced_pairs, parsed.consumed_pairs):
 				ok = False
+
+		if args.verbose or not ok:
+			sys.stdout.write(out if out.endswith("\n") else out + "\n")
 
 		if not ok:
 			failures.append(app)

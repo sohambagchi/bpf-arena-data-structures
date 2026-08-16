@@ -1,35 +1,14 @@
 #!/usr/bin/env python3
-"""Single orchestration endpoint for the whole artifact pipeline.
+"""Run the artifact pipeline: kconfig -> usertests -> runner.
 
-Runs, in order:
-
-    1. kconfig    python3 scripts/check_kconfig.py   -- kernel supports the relays
-    2. usertests  python3 scripts/usertests.py       -- userspace DS correctness
-    3. runner     python3 scripts/runner.py          -- eight relays + ranking + CSV
-
-Building is deliberately *not* one of them.  `make` is an explicit step you run
-first, as your normal user; this script only runs what it left in build/ and
-fails up front if those binaries are missing.  The reason is sudo, which the
-runner stage needs: sudo resets the environment, so a build launched through it
-loses the dev shell's compiler settings -- inside `nix develop` that is
-NIX_CFLAGS_COMPILE and PKG_CONFIG_PATH, without which the very same `make`
-fails on "libelf.h: No such file or directory".  It would also leave root-owned
-objects in build/ and .output/ that the next unprivileged `make` cannot
-overwrite.
-
-Each stage runs as a subprocess with its output streamed live and captured, so
-a failure can be reported loudly (banner + output tail + hint) instead of
-scrolling past.  By default the pipeline stops at the first failing stage,
-since every later stage depends on the earlier ones: an unmet kernel config
-makes the relays unattachable, and a failing usertest makes their numbers
-meaningless.
+Builds nothing: `make` is a separate, unprivileged step, and this script runs
+the binaries it left in build/.  Stops at the first failing stage unless
+--keep-going, since each stage depends on the ones before it.
 
 Usage:
-    make                                           # separate, unprivileged step
-    sudo python3 scripts/run_all.py                # full pipeline; relays need root
+    make                                           # first, as your normal user
+    sudo python3 scripts/run_all.py                # the relays need root
     python3 scripts/run_all.py --only usertests    # one stage
-    python3 scripts/run_all.py --skip kconfig
-    python3 scripts/run_all.py --keep-going        # run everything, report at end
 
 Exit status: 0 if every executed stage passed, 1 otherwise.
 """
@@ -56,35 +35,11 @@ STAGE_BINARIES = {
 BANNER_WIDTH = 72
 
 STAGE_HINTS = {
-    "kconfig": (
-        "This kernel cannot run the arena relays.\n"
-        "  - Apply kernel/configs/delta-bpf-arena.config and rebuild, or boot a\n"
-        "    kernel that already satisfies it; the report above lists each\n"
-        "    unmet symbol.\n"
-        "  - To check a different config: "
-        "python3 scripts/run_all.py --config path/to/.config\n"
-        "  - The later stages can still be run against a compliant kernel later."
-    ),
-    "usertests": (
-        "A userspace data structure test failed -- the relay measurements would\n"
-        "  be meaningless, so the pipeline stopped here.\n"
-        "  - See which ones: python3 scripts/usertests.py --keep-going\n"
-        "  - These are pure pthread tests; a failure is a data structure bug,\n"
-        "    not a kernel or BPF configuration problem."
-    ),
-    "runner": (
-        "The relay run failed.\n"
-        "  - It needs root (BPF program load + trace_pipe): "
-        "sudo python3 scripts/run_all.py --only runner\n"
-        "  - It also needs debugfs mounted: "
-        "sudo mount -t debugfs none /sys/kernel/debug\n"
-        "  - Confirm the kernel side first: python3 scripts/check_kconfig.py\n"
-        "  - In Docker, a plain `docker run` cannot do this no matter how root\n"
-        "    you are inside it: seccomp blocks bpf(2), CAP_BPF/CAP_PERFMON are\n"
-        "    absent, and debugfs, bpffs, securityfs and /boot are unmounted. Start\n"
-        "    the container from the host with the wrapper that supplies all of\n"
-        "    them:  scripts/run-docker.sh -- python3 scripts/run_all.py"
-    ),
+    "kconfig": "Boot a kernel that satisfies it: ./scripts/build-kernel.sh --base running -y",
+    "usertests": "A pure pthread test failed, so this is a data structure bug, "
+                 "not a kernel or BPF problem.",
+    "runner": "The relays need root, debugfs mounted, and the kernel from "
+              "check_kconfig.py. In Docker: scripts/init-docker.sh -- python3 scripts/run_all.py",
 }
 
 
@@ -169,28 +124,20 @@ def run_stage(name: str, cmd: List[str], cwd: Path, dry_run: bool = False) -> Di
     }
 
 
-def report_stage_failure(result: Dict, tail_lines: int = 20):
-    """Print a loud, self-contained failure report for one stage."""
+def report_stage_failure(result: Dict, tail_lines: int = 10):
+    """Print a short failure report for one stage."""
     stage = result['stage']
 
-    print(banner([
-        f"STAGE FAILED: {stage}",
-        "",
-        f"command    : {result['command']}",
-        f"exit status: {result['return_code']}",
-        f"elapsed    : {result['elapsed']:.1f}s",
-    ]), flush=True)
+    print(banner([f"STAGE FAILED: {stage} (exit {result['return_code']})",
+                  result['command']]), flush=True)
 
     tail = [line.rstrip() for line in result['output'].splitlines() if line.strip()]
-    if tail:
-        print(f"  Last {min(tail_lines, len(tail))} non-empty line(s) of {stage} output:")
-        for line in tail[-tail_lines:]:
-            print(f"    | {line}")
-        print()
+    for line in tail[-tail_lines:]:
+        print(f"    | {line}")
 
     hint = STAGE_HINTS.get(stage)
     if hint:
-        print(f"  What to do:\n  {hint}\n", flush=True)
+        print(f"\n  {hint}\n", flush=True)
 
 
 def newest_csv_files(csv_dir: Path, before: set) -> List[Path]:
@@ -213,13 +160,7 @@ def makefile_apps(root: Path, variable: str) -> List[str]:
 
 
 def check_binaries(stages: List[str], root: Path) -> bool:
-    """Fail before the first stage if `make` has not been run.
-
-    Building is a separate step on purpose (see the module docstring), so the
-    binaries either exist or the pipeline has nothing to run.  Saying so here,
-    naming every missing one at once, beats letting usertests.py find an empty
-    build/ and runner.py then report "No executables found!".
-    """
+    """Fail before the first stage, naming every missing binary at once."""
     missing: List[str] = []
     for stage in stages:
         variable = STAGE_BINARIES.get(stage)
@@ -233,48 +174,21 @@ def check_binaries(stages: List[str], root: Path) -> bool:
     if not missing:
         return True
 
-    lines = ["ERROR: the binaries are not built", "",
-             "run_all.py builds nothing; it runs what `make` leaves in build/.",
-             "", "Missing:"]
+    lines = ["ERROR: not built -- run `make` first, as your normal user", "", "Missing:"]
     lines += [f"  {entry}" for entry in missing]
-    lines += [
-        "",
-        "Build first, as your normal user -- not under sudo:",
-        "",
-        "  make",
-        "  sudo python3 scripts/run_all.py",
-        "",
-        "sudo resets the environment, so a build started through it loses the",
-        "dev shell's compiler settings: inside `nix develop` that is",
-        "NIX_CFLAGS_COMPILE and PKG_CONFIG_PATH, and the compile then fails on",
-        '"libelf.h: No such file or directory" even though the same `make`',
-        "succeeds as your normal user.  It also leaves root-owned objects that",
-        "the next unprivileged `make` cannot overwrite.",
-        "",
-        "If `make` itself is what failed:",
-        "  - libbpf/bpftool are submodules: git submodule update --init --recursive",
-        "  - needs clang-20 (or set CLANG=clang) with BPF arena support",
-        "  - re-run it verbosely: make V=1",
-    ]
     print(banner(lines), file=sys.stderr, flush=True)
     return False
 
 
 def check_privileges(stages: List[str]) -> None:
-    """Warn up front -- before the earlier stages run -- if the relay stage will not work."""
+    """Warn up front if the relay stage will not work."""
     if "runner" not in stages:
         return
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         return
 
-    print(banner([
-        "WARNING: not running as root",
-        "",
-        "The 'runner' stage loads BPF programs and reads trace_pipe, both of",
-        "which require root. It will very likely fail at the end of this run.",
-        "",
-        "Re-run as:  sudo python3 scripts/run_all.py",
-    ], char="!"), flush=True)
+    print(banner(["WARNING: not root; the 'runner' stage will fail",
+                  "Re-run as: sudo python3 scripts/run_all.py"], char="!"), flush=True)
 
 
 def print_summary(results: List[Dict], csv_files: List[Path]) -> None:
@@ -304,10 +218,7 @@ def print_summary(results: List[Dict], csv_files: List[Path]) -> None:
 
     lines = [f"PIPELINE FAILED: {len(failed)} of {len(results)} stage(s)", ""]
     for result in failed:
-        lines.append(f"{result['stage']:<12} exit {result['return_code']}  "
-                     f"({result['command']})")
-    lines += ["", "See the STAGE FAILED report(s) above for the output tail and",
-              "the suggested fix for each."]
+        lines.append(f"{result['stage']:<12} exit {result['return_code']}")
     print(banner(lines))
 
 
@@ -367,11 +278,8 @@ def main() -> int:
     }
 
     print(f"{'='*BANNER_WIDTH}")
-    print("BPF Arena Data Structures -- full pipeline")
+    print(f"BPF Arena Data Structures -- {' -> '.join(stages)}")
     print(f"{'='*BANNER_WIDTH}")
-    print(f"Repo root : {root}")
-    print(f"Stages    : {' -> '.join(stages)}")
-    print(f"On failure: {'continue' if args.keep_going else 'stop'}")
 
     if not args.dry_run:
         check_privileges(stages)

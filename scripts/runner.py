@@ -43,51 +43,26 @@ def in_container() -> bool:
 
 
 def preflight() -> List[str]:
-    """Check what every relay needs, before spending a run finding out.
-
-    All eight relays fail the same way and for the same reason when the
-    environment is wrong -- not root, no BTF, no trace_pipe -- so without this
-    you watch the identical opaque failure eight times over ten seconds each.
-    Returns a list of problem descriptions; empty means good to go.
-    """
+    """What every relay needs. Returns problem descriptions; empty means go."""
     problems: List[str] = []
 
     if hasattr(os, 'geteuid') and os.geteuid() != 0:
-        problems.append(
-            "not running as root; loading BPF programs and reading trace_pipe\n"
-            "    both need it:  sudo python3 scripts/runner.py"
-        )
+        problems.append("not root: sudo python3 scripts/runner.py")
 
     if not os.path.exists(BTF_PATH):
-        problems.append(
-            f"no host BTF at {BTF_PATH}; the lsm.s and uprobe.s programs\n"
-            "    cannot attach without it. The running kernel needs\n"
-            "    CONFIG_DEBUG_INFO_BTF=y -- check with scripts/check_kconfig.py"
-        )
+        problems.append(f"no host BTF at {BTF_PATH} (needs CONFIG_DEBUG_INFO_BTF=y)")
 
     if not os.path.exists(TRACE_PIPE_PATH):
-        problems.append(
-            f"{TRACE_PIPE_PATH} does not exist; the relays report through\n"
-            "    bpf_printk() and trace validation reads it back. Mount debugfs:\n"
-            "    sudo mount -t debugfs none /sys/kernel/debug"
-        )
+        problems.append(f"no {TRACE_PIPE_PATH}: "
+                        "sudo mount -t debugfs none /sys/kernel/debug")
     elif not os.access(TRACE_PIPE_PATH, os.R_OK):
-        problems.append(f"{TRACE_PIPE_PATH} is not readable by this process")
+        problems.append(f"{TRACE_PIPE_PATH} is not readable")
 
     if os.path.exists(TRACE_CLEAR_PATH) and not os.access(TRACE_CLEAR_PATH, os.W_OK):
-        problems.append(
-            f"{TRACE_CLEAR_PATH} is not writable, so the trace buffer cannot be\n"
-            "    cleared between relays and validation would see stale events"
-        )
+        problems.append(f"{TRACE_CLEAR_PATH} is not writable; stale trace events")
 
     if problems and in_container():
-        problems.append(
-            "this is a container, and a plain `docker run` cannot run the relays:\n"
-            "    the seccomp profile blocks bpf(2), CAP_BPF/CAP_PERFMON are absent,\n"
-            "    and debugfs, bpffs, securityfs and /boot are not mounted.\n"
-            "    Start it with the wrapper instead, from the host:\n"
-            "    scripts/run-docker.sh -- python3 scripts/run_all.py"
-        )
+        problems.append("in a container: start it with scripts/init-docker.sh")
 
     return problems
 
@@ -100,8 +75,7 @@ def find_executables() -> List[str]:
     for exe in candidates:
         if os.path.isfile(os.path.join('build', exe)) and os.access(os.path.join('build', exe), os.X_OK):
             executables.append(os.path.join('build', exe))
-            print(f"Found executable: {exe}")
-    
+
     return executables
 
 
@@ -219,14 +193,10 @@ def validate_trace_output(trace_log_path: Path, executable: str, produced_touch_
         print("  Trace validation FAILED: consumer output contained no touch worker PIDs")
         return False
 
-    ambient_counter = consumed_counter - expected_counter
-    ambient_total = sum(ambient_counter.values())
-    suffix = f" (ignored {ambient_total} ambient system event(s))" if ambient_total else ""
+    ambient_total = sum((consumed_counter - expected_counter).values())
+    suffix = f" (ignored {ambient_total} ambient event(s))" if ambient_total else ""
     print(f"  Trace validation PASSED: {matched_total} consumed events matched "
           f"touch input PIDs{suffix}")
-    if ambient_counter:
-        print(f"    Ambient keys and counts: {dict(ambient_counter)}")
-    print(f"  Trace output file: {trace_log_path}")
     return True
 
 
@@ -402,10 +372,10 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
     """
     nproc = 1
     print(f"\n{'='*60}")
-    print(f"Running: {executable} for {duration} seconds")
-    print(f"Spawning {nproc} concurrent touch processes on separate cores")
+    print(f"Running: {executable} for {duration}s, {nproc} touch worker(s)")
     print(f"{'='*60}")
-    
+
+
     manager = multiprocessing.Manager()
     start_event = manager.Event()
     stop_event = manager.Event()
@@ -424,9 +394,7 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
     
     for event in ready_events:
         event.wait()
-    
-    print(f"All {nproc} worker processes ready on separate cores")
-    
+
     clear_trace_buffer()
     trace_log_path = Path('build') / f"{Path(executable).name}_trace_pipe.log"
     trace_stop_event = threading.Event()
@@ -463,8 +431,7 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
         thread.start()
 
     start_event.set()
-    print(f"Signaled all workers to start creating files continuously")
-    
+
     time.sleep(duration)
     
     exe_process.terminate()
@@ -492,22 +459,19 @@ def run_executable_with_concurrent_touches(executable: str, duration: int = 10, 
     trace_validation_ok = validate_trace_output(trace_log_path, executable, list(touch_pids))
     
     elapsed = end_time - start_time
-    print(f"\nResults for {executable}:")
-    print(f"  Return code: {exe_process.returncode}")
-    print(f"  Elapsed time: {elapsed:.2f} seconds")
-    
-    if not show_output:
-        if stdout:
-            print(f"  STDOUT:\n{stdout}")
-        if stderr:
-            print(f"  STDERR:\n{stderr}")
-
     metrics = parse_metrics(stdout)
+
     if metrics:
         print(f"  Aggregate throughput: {metrics['ops_per_sec']:,.0f} ops/sec "
-              f"over {metrics['success_ops']:,} successful ops")
+              f"over {metrics['success_ops']:,} successful ops "
+              f"({elapsed:.1f}s, rc={exe_process.returncode})")
     else:
-        print("  Warning: no performance metrics table captured")
+        print(f"  FAILED: no metrics table captured (rc={exe_process.returncode})")
+        if not show_output:
+            if stdout:
+                print(f"  STDOUT:\n{stdout}")
+            if stderr:
+                print(f"  STDERR:\n{stderr}")
 
     cleaned_count = 0
     for i in range(nproc):
@@ -559,41 +523,30 @@ def main():
     )
     args = parser.parse_args()
 
-    print("BPF Arena Data Structures Test Runner")
-    print("=" * 60)
-
     problems = preflight()
     if problems:
-        print("\n" + "!" * 60)
-        print("ENVIRONMENT CHECK FAILED -- the relays cannot run here")
-        print("!" * 60)
+        print("ENVIRONMENT CHECK FAILED -- the relays cannot run here:")
         for problem in problems:
             print(f"  - {problem}")
-        print("!" * 60)
         if not args.no_preflight:
-            print("\nNothing was run. Override with --no-preflight to try anyway.")
             return 1
-        print("\nContinuing anyway because --no-preflight was given.\n")
-
+        print("Continuing anyway (--no-preflight).")
 
     executables = find_executables()
-    
+
     if not executables:
-        print("No executables found! Expected: skeleton, skeleton_msqueue, skeleton_vyukhov")
+        print("No relay binaries in build/ -- run `make` first")
         return 1
-    
-    print(f"\nFound {len(executables)} executable(s)")
-    
+
     if args.executables:
         filter_set = set(args.executables)
         executables = [
             exe for exe in executables
             if exe in filter_set or os.path.basename(exe) in filter_set
         ]
-        print(f"Filtered executables to run: {executables}")
-    
-    print(f"CPU count: {multiprocessing.cpu_count()}")
-    
+
+    print(f"Running {len(executables)} relay(s) on {multiprocessing.cpu_count()} CPUs")
+
     results = []
     for exe in executables:
         result = run_executable_with_concurrent_touches(
@@ -603,16 +556,6 @@ def main():
         )
         results.append(result)
     
-    print(f"\n{'='*60}")
-    print("SUMMARY")
-    print(f"{'='*60}")
-    for result in results:
-        print(f"{result['executable']}:")
-        print(f"  Success: {'Yes' if result['return_code'] == 0 else 'No'}")
-        print(f"  Trace match: {'Yes' if result['trace_validation_ok'] else 'No'}")
-        print(f"  Time: {result['elapsed_time']:.2f}s")
-        print(f"  Workers: {result['total_workers']}")
-
     csv_path = export_metrics_csv(results, Path(args.csv_dir))
     if csv_path:
         print(f"\nRaw metrics CSV: {csv_path}")

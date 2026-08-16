@@ -1195,13 +1195,7 @@ After the implementation compiles and passes basic testing:
 
 1. **`docs/LKMM_OPTIMIZATIONS.md`:** Add a new section with function-by-function analysis of the new data structure's `_lkmm` functions, explaining every LKMM optimization applied. Follow the format of the existing sections (algorithm sketch → function-by-function analysis).
 
-2. **`INDEX.md`:** Add entries for the new files in the Source Code and Test Framework sections.
-
-3. **`docs/GUIDE.md`:** Add a row to the "Implemented Data Structures" table:
-
-```markdown
-| **<Name>** | `ds_<name>.h` | `skeleton_<name>` | <Description>. |
-```
+2. **`README.md`:** Add a row to the data structure table.
 
 ---
 

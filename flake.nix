@@ -25,7 +25,7 @@
         zlib
         openssl
         git
-        (python3.withPackages (ps: [ ps.networkx ]))
+        python3
       ];
 
       bpftoolFullTools = pkgs: with pkgs; [
@@ -103,19 +103,10 @@
                 | tr '\n' ' '
             )"
 
-            echo "bpf-arena-data-structures dev shell"
-            echo "  clang : $(clang --version | head -n1)"
-            echo "  gcc   : $(gcc  --version | head -n1)"
-            echo "  python: $(python3 --version)"
-            echo "  kernel: bison flex bc pahole qemu on PATH"
-            echo "  libs  : LLVM + libbfd/libopcodes + libcap (full bpftool: jited dump, feature probe)"
-            echo
-            echo "  build : git submodule update --init --recursive && make"
-            echo "  run   : sudo python3 scripts/run_all.py   (build first: it compiles nothing)"
-            echo "  test  : python3 scripts/usertests.py --build"
-            echo "  kconf : python3 scripts/check_kconfig.py"
-            echo "  kbuild: ./scripts/build-kernel.sh --base running -y"
-            echo "  vm    : nix run .#vm     (boots Linux ${pkgs.linux_6_18.version} with this repo's config)"
+            echo "bpf-arena-data-structures dev shell -- $(clang --version | head -n1)"
+            echo "  kernel : ./scripts/build-kernel.sh --base running -y"
+            echo "  build  : make"
+            echo "  run    : sudo python3 scripts/run_all.py"
           '';
         };
 
@@ -231,17 +222,13 @@
               bpf-arena-data-structures artifact VM
               kernel: ${config.boot.kernelPackages.kernel.version}
 
-              Build on the HOST first, inside `nix develop`:  make
-              /repo is your checkout and the guest shares the host's Nix store,
-              so build/ is already populated and runnable here. Do not `make`
-              in the guest: a NixOS system environment carries no -dev outputs
-              (no libelf.h), which is the same failure `sudo make` gives.
+              Run `make` on the host inside `nix develop` first -- the guest
+              shares the host's Nix store but carries no -dev outputs, so a
+              build here fails on libelf.h. Then:
 
-                cd /repo
-                python3 scripts/run_all.py     # kconfig -> usertests -> runner
-                                               # already root; it compiles nothing
+                cd /repo && python3 scripts/run_all.py
 
-              Run the VM with AE_REPO=$PWD so /repo points at your checkout.
+              Start the VM with AE_REPO=$PWD so /repo is your checkout.
 
             '';
           })

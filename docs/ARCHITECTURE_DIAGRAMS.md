@@ -74,6 +74,8 @@ Folly SPSC         build/skeleton_folly_spsc      include/ds_folly_spsc.h
 CK FIFO SPSC       build/skeleton_ck_fifo_spsc    include/ds_ck_fifo_spsc.h
 CK Ring SPSC       build/skeleton_ck_ring_spsc    include/ds_ck_ring_spsc.h
 CK Stack UPMC      build/skeleton_ck_stack_upmc   include/ds_ck_stack_upmc.h
+io_uring Ring      build/skeleton_io_uring        include/ds_io_uring.h
+kcov Buffer        build/skeleton_kcov            include/ds_kcov.h
 ```
 
 ## Testing paths
@@ -85,5 +87,3 @@ BPF relay path:
 Userspace-only path:
   python3 scripts/usertests.py --build
 ```
-
-Note: legacy `scripts/test_*.sh` and `scripts/benchmark.sh` are template scripts from an older CLI model.

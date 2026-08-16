@@ -17,10 +17,6 @@ set -Eeuo pipefail
 #       --suite NAME     Ubuntu suite (codename) for the apt repository,
 #                        e.g. noble -- needed on Ubuntu derivatives whose own
 #                        codename Docker does not publish
-#       --convenience-script
-#                        install via https://get.docker.com instead of setting
-#                        up the apt repository by hand (upstream calls this
-#                        unsuitable for production)
 #       --configure-only Docker is already installed; only run the service,
 #                        group and verification steps
 #       --user NAME      user to add to the docker group (default: the invoking
@@ -49,7 +45,6 @@ GPG_URL="$DOCKER_REPO/gpg"
 KEYRING="/etc/apt/keyrings/docker.asc"
 SOURCES="/etc/apt/sources.list.d/docker.sources"
 LEGACY_SOURCES="/etc/apt/sources.list.d/docker.list"
-CONVENIENCE_URL="https://get.docker.com"
 
 # The packages upstream tells you to remove first: distro forks and the
 # unofficial packaging, all of which own files docker-ce also wants.
@@ -70,7 +65,6 @@ REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 # ---------------------------------------------------------------------------
 ASSUME_YES=0
 CONFIGURE_ONLY=0
-CONVENIENCE=0
 DRY_RUN=0
 NO_GROUP=0
 HELLO_WORLD=1
@@ -139,7 +133,6 @@ while (($# > 0)); do
         --suite=*)            SUITE="${1#*=}" ;;
         --user)               need_arg "$@"; TARGET_USER="$2"; shift ;;
         --user=*)             TARGET_USER="${1#*=}" ;;
-        --convenience-script) CONVENIENCE=1 ;;
         --configure-only)     CONFIGURE_ONLY=1 ;;
         --no-group)           NO_GROUP=1 ;;
         --no-hello-world)     HELLO_WORLD=0 ;;
@@ -150,19 +143,11 @@ while (($# > 0)); do
     shift
 done
 
-if ((CONVENIENCE)) && [[ -n "$DOCKER_VERSION" ]]; then
-    die 1 "--version and --convenience-script are mutually exclusive" \
-        "get.docker.com installs whatever is current. Drop --convenience-script" \
-        "to pin a version through the apt repository."
-fi
-
 # ---------------------------------------------------------------------------
 # Environment probes
 # ---------------------------------------------------------------------------
 [[ "$(uname -s)" == Linux ]] || die 2 "unsupported platform: $(uname -s)" \
-    "Docker Engine is Linux-only. On macOS or Windows install Docker Desktop:" \
-    "  https://docs.docker.com/desktop/" \
-    "On Windows you can also run this script inside a WSL2 distribution."
+    "Docker Engine is Linux-only."
 
 [[ -r /etc/os-release ]] || die 2 "no /etc/os-release; cannot identify the distribution" \
     "This script targets Ubuntu. Other distributions:" \
@@ -184,9 +169,8 @@ if [[ "$DISTRO_ID" != ubuntu ]]; then
         warn "$DISTRO_NAME is not Ubuntu, but is based on Ubuntu ${UBUNTU_CODENAME}; using that repository"
     elif [[ "$DISTRO_ID" == debian || " ${ID_LIKE:-} " == *" debian "* ]]; then
         die 2 "$DISTRO_NAME is Debian-based but not Ubuntu" \
-            "This script only handles the Ubuntu repository. For Debian follow:" \
-            "  https://docs.docker.com/engine/install/debian/" \
-            "If you know the matching Ubuntu suite, force it with --suite <codename>."
+            "This script only handles the Ubuntu repository:" \
+            "  https://docs.docker.com/engine/install/debian/"
     else
         die 2 "unsupported distribution: $DISTRO_NAME" \
             "This script follows https://docs.docker.com/engine/install/ubuntu/." \
@@ -228,7 +212,7 @@ printf '%s\n' "${C_BLU}Docker Engine setup for bpf-arena-data-structures${C_OFF}
 info "repo        : $REPO_ROOT"
 info "distro      : $DISTRO_NAME$( ((IS_WSL)) && printf ' (WSL)' )$( ((IN_CONTAINER)) && printf ' (inside a container)' )"
 info "suite       : $SUITE${ARCH:+ / $ARCH}"
-info "method      : $( ((CONVENIENCE)) && echo "convenience script ($CONVENIENCE_URL)" || echo "apt repository ($DOCKER_REPO)" )"
+info "repository  : $DOCKER_REPO"
 info "packages    : ${PACKAGES[*]}"
 [[ -n "$DOCKER_VERSION" ]] && info "version     : $DOCKER_VERSION"
 info "init        : $( ((HAS_SYSTEMD)) && echo systemd || echo 'no systemd (sysv service)' )"
@@ -324,17 +308,12 @@ step "Configuring the apt repository"
 
 if ((CONFIGURE_ONLY)); then
     skip "--configure-only"
-elif ((CONVENIENCE)); then
-    skip "the convenience script sets up the repository itself"
 else
     # Fail early and legibly rather than on a 404 from apt-get update.
     if ! curl -fsSL -o /dev/null "$DOCKER_REPO/dists/$SUITE/Release"; then
         die 5 "Docker publishes no '$SUITE' suite" \
             "Checked: $DOCKER_REPO/dists/$SUITE/Release" \
-            "Ubuntu derivatives should use their Ubuntu base, and very new or" \
-            "very old releases may not be published yet. Pick a suite explicitly:" \
-            "  scripts/install-docker.sh --suite noble     # 24.04" \
-            "  scripts/install-docker.sh --suite jammy     # 22.04"
+            "Pick one explicitly, e.g.:  scripts/install-docker.sh --suite noble"
     fi
     ok "$DOCKER_REPO/dists/$SUITE exists"
 
@@ -408,24 +387,6 @@ if ((CONFIGURE_ONLY)); then
     have_docker || die 6 "--configure-only was given but no 'docker' is on PATH" \
         "Re-run without --configure-only."
     skip "already installed: $(docker --version)"
-elif ((CONVENIENCE)); then
-    info "curl -fsSL $CONVENIENCE_URL | sh"
-    info "(upstream considers this unsuitable for production; it is here for"
-    info " throwaway VMs and CI images)"
-    if ((DRY_RUN)); then
-        run sh -c "curl -fsSL $CONVENIENCE_URL | $SUDO sh"
-    else
-        script="$(mktemp)"
-        trap 'rm -f "${script:-}"' EXIT
-        curl -fsSL --proto '=https' --tlsv1.2 "$CONVENIENCE_URL" -o "$script" \
-            || die 6 "could not download $CONVENIENCE_URL"
-        $SUDO sh "$script" \
-            || die 6 "the convenience script failed" \
-                    "Re-run this script without --convenience-script to use the" \
-                    "apt repository, which reports errors per package."
-        rm -f "$script"; trap - EXIT
-        ok "installed $(docker --version)"
-    fi
 else
     install_pkgs=("${PACKAGES[@]}")
     if [[ -n "$DOCKER_VERSION" ]]; then
@@ -508,9 +469,7 @@ elif ! id "$TARGET_USER" >/dev/null 2>&1; then
 elif id -nG "$TARGET_USER" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
     skip "$TARGET_USER is already in the docker group"
 else
-    warn "membership in 'docker' is equivalent to root on this host: the daemon"
-    warn "runs as root and will bind-mount any path into a container. Use"
-    warn "--no-group (and sudo docker) on a machine where that matters."
+    warn "the 'docker' group is root-equivalent on this host; --no-group opts out"
     getent group docker >/dev/null 2>&1 || run $SUDO groupadd docker \
         || die 8 "groupadd docker failed"
     run $SUDO usermod -aG docker "$TARGET_USER" \
@@ -569,10 +528,8 @@ if ((HELLO_WORLD)); then
         ok "pulled and ran hello-world"
     else
         die 9 "'docker run hello-world' failed" \
-            "The daemon is up but could not pull or run an image. Usual causes:" \
-            "  no network / a proxy that needs /etc/systemd/system/docker.service.d" \
-            "  a full disk under /var/lib/docker" \
-            "Re-run the command by hand to see the error:  sudo docker run --rm hello-world"
+            "The daemon is up but could not pull or run an image (no network, or" \
+            "a full /var/lib/docker). See:  sudo docker run --rm hello-world"
     fi
 else
     skip "--no-hello-world"
@@ -594,7 +551,6 @@ printf '\n%sDocker is ready.%s Next:\n\n' "$C_GRN" "$C_OFF"
 printf '  cd %s\n' "$REPO_ROOT"
 printf '  git submodule update --init --recursive\n'
 printf '  docker build -t bpf-arena-ds .\n'
-# shellcheck disable=SC2016  # $PWD is meant to reach the reader literally
-printf '  docker run --rm -it -v "$PWD:/artifact" bpf-arena-ds\n\n'
-printf '%sThe container shares the host kernel, so only the userspace half of the\n' "$C_DIM"
-printf 'artifact runs under it -- see the FAQ in README.md.%s\n' "$C_OFF"
+printf '  scripts/init-docker.sh\n\n'
+printf '%sThe container shares the host kernel: the relays need the host running\n' "$C_DIM"
+printf 'the kernel from README step 4.%s\n' "$C_OFF"

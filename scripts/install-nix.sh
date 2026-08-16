@@ -1,6 +1,24 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# USAGE-START
+# scripts/install-nix.sh -- install Nix and enable the flakes support this
+#                           repo's `nix develop` needs
+#
+# Every step is skipped when it is already done, so re-running is safe.
+#
+# usage: scripts/install-nix.sh [options]
+#
+#   -y, --yes            do not ask for confirmation
+#       --no-daemon      single-user install (~/.config/nix/nix.conf)
+#       --configure-only Nix is installed; only enable flakes and restart it
+#   -h, --help           this text
+#
+# exit codes:
+#   2  unsupported platform    3  missing prerequisite    4  install failed
+#   5  could not enable flakes  6  daemon restart failed  7  verification failed
+# USAGE-END
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -51,7 +69,8 @@ die() {
 }
 
 usage() {
-    sed -n '3,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '/^# USAGE-START/,/^# USAGE-END/p' "${BASH_SOURCE[0]}" \
+        | sed -e '1d' -e '$d' -e 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -76,9 +95,7 @@ done
 OS="$(uname -s)"
 case "$OS" in
     Linux|Darwin) ;;
-    *) die 2 "unsupported platform: $OS" \
-            "Nix supports Linux and macOS. On Windows, use WSL2 and run this" \
-            "script inside the WSL distribution." ;;
+    *) die 2 "unsupported platform: $OS" "Nix supports Linux and macOS." ;;
 esac
 
 IS_NIXOS=0
@@ -166,10 +183,8 @@ else
     info "(the installer prints its own plan and asks for sudo)"
     if ! curl --proto '=https' --tlsv1.2 -sSf -L "$INSTALLER_URL" | sh -s -- "${installer_args[@]}"; then
         die 4 "the Nix installer failed" \
-            "Full instructions: https://nixos.org/download/" \
-            "If a previous install left /nix behind, remove it first, or use the" \
-            "Determinate installer which can uninstall cleanly:" \
-            "  https://github.com/DeterminateSystems/nix-installer"
+            "See https://nixos.org/download/ (a partially removed /nix is the" \
+            "usual cause; remove it first)."
     fi
     load_nix_profile
     have_nix || die 4 "Nix installed but 'nix' is not on PATH in this shell" \
@@ -274,8 +289,7 @@ if version_ge "$ver" "$REQUIRED_NIX_VERSION"; then
     ok "nix $ver (>= $REQUIRED_NIX_VERSION)"
 else
     die 7 "nix $ver is too old; this flake needs >= $REQUIRED_NIX_VERSION" \
-        "inputs.self.submodules (which pulls third_party/ into the flake source)" \
-        "is a 2.27 feature. Upgrade with:  sudo -i nix upgrade-nix"
+        "inputs.self.submodules is a 2.27 feature. Upgrade:  sudo -i nix upgrade-nix"
 fi
 
 features_active \

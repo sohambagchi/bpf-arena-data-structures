@@ -1,29 +1,16 @@
 #!/usr/bin/env python3
 """Check that a kernel .config can build and run the arena relay apps.
 
-Text analysis of a .config, plus -- when the config being checked is the one
-the running kernel booted from -- a runtime check of the LSM list. This never
-builds a kernel, modifies a bootloader, or runs an experiment.
-
-The runtime check exists because CONFIG_LSM is not the last word: an `lsm=`
-kernel command line *replaces* that list outright, so a config containing
-"bpf" can still boot into a kernel where the BPF LSM is inactive and every
-lsm.s program fails to attach. The reverse also happens -- a command line can
-supply "bpf" that the config lacks. Only /sys/kernel/security/lsm knows.
+Text analysis of a .config, plus -- when it is the config the running kernel
+booted from -- a runtime check of the LSM list, because an `lsm=` command line
+replaces CONFIG_LSM outright and only /sys/kernel/security/lsm knows what was
+actually activated.
 
 Usage:
     python3 scripts/check_kconfig.py [path/to/.config]
     python3 scripts/check_kconfig.py --print-lsm-fix   # emit the lsm= line to set
 
 Defaults to /boot/config-$(uname -r), falling back to /proc/config.gz.
-Runtime checks run only for that auto-detected config (override with
---runtime / --no-runtime).
-
-The companion file kernel/configs/delta-bpf-arena.config sets only the
-user-settable symbols. This script additionally verifies the derived ones
-(def_bool / select-only) that olddefconfig is expected to turn on, since a
-fragment cannot set those and a silently-missing one shows up much later as
-a confusing load or attach failure.
 
 Exit status: 0 if every requirement is met, 1 otherwise.
 """
@@ -186,23 +173,13 @@ def lsm_fix_value(config_lsm, cmdline_lsm):
 def print_lsm_fix(value, indent="  "):
     """Print how to apply an lsm= value. Prints only -- never edits anything."""
     pad = indent
-    print("%sSet this on the kernel command line. It replaces the built-in" % pad)
-    print("%slist, so it already includes everything you have now:" % pad)
+    print("%sAdd to the kernel command line (it replaces the built-in list, so" % pad)
+    print("%sthis one already includes everything active now), then reboot:" % pad)
     print()
     print("%s    lsm=%s" % (pad, value))
     print()
-    print("%sFor one boot, to test: at the GRUB menu press 'e', append it to" % pad)
-    print("%sthe 'linux' line, then Ctrl-X. To make it permanent:" % pad)
-    print()
-    print("%s    Debian/Ubuntu  add to GRUB_CMDLINE_LINUX in /etc/default/grub," % pad)
-    print("%s                   then: sudo update-grub" % pad)
-    print("%s    Fedora/RHEL    sudo grubby --update-kernel=ALL \\" % pad)
-    print("%s                       --args='lsm=%s'" % (pad, value))
-    print("%s    systemd-boot   the 'options' line in /boot/loader/entries/*.conf" % pad)
-    print("%s    NixOS          boot.kernelParams in configuration.nix" % pad)
-    print()
-    print("%sThen reboot and re-run this script. ('capability' and 'ima' may" % pad)
-    print("%sappear in the active list without being on the command line.)" % pad)
+    print("%sOn Debian/Ubuntu: GRUB_CMDLINE_LINUX in /etc/default/grub, then" % pad)
+    print("%ssudo update-grub." % pad)
 
 
 def main():

@@ -109,12 +109,8 @@ $(call allow-override,LD,$(CROSS_COMPILE)ld)
 .PHONY: all
 all: $(BINARIES)
 	@echo ""
-	@echo "Build complete! Built applications:"
-	@for app in $(BINARIES); do echo "  - $$app"; done
-	@echo ""
-	@echo "Run tests (binaries are placed in $(OUT_DIR)):" 
-	@echo "  sudo $(OUT_DIR)/skeleton_msqueue -d 5    # run msqueue test (5s)"
-	@echo "  Use -v to enable verification on exit: sudo $(OUT_DIR)/skeleton_msqueue -v"
+	@echo "Built $(words $(BINARIES)) binaries into $(OUT_DIR)/"
+	@echo "Next: sudo python3 scripts/run_all.py"
 
 .PHONY: clean
 clean:
@@ -185,58 +181,18 @@ $(APPS): %: $(OUT_DIR)/%
 
 .PHONY: usertest
 usertest: $(patsubst %,$(OUT_DIR)/%,$(USERTEST_APPS))
-	@echo ""
-	@echo "Built userspace-only test runners:"
-	@for app in $(patsubst %,$(OUT_DIR)/%,$(USERTEST_APPS)); do echo "  - $$app"; done
 
 # ============================================================================
-# TESTING TARGETS
+# DISASSEMBLY
 # ============================================================================
 
-.PHONY: test
-
-.PHONY: asm
+.PHONY: asm asm-user
 asm: $(patsubst %,$(OUT_DIR)/%.S,$(BPF_APPS))
+asm-user: $(patsubst %,$(OUT_DIR)/%.S,$(USERTEST_APPS))
 
 $(OUT_DIR)/%.S: $(OUT_DIR)/% | $(OUT_DIR)
 	$(call msg,ASM,$@)
 	$(Q)$(OBJDUMP) -d -M intel -S $< > $@
-
-.PHONY: asm-user
-asm-user: $(patsubst %,$(OUT_DIR)/%.S,$(USERTEST_APPS))
-
-$(OUT_DIR)/%.S: $(OUT_DIR)/% | $(OUT_DIR)
-	$(call msg,ASM-USER,$@)
-	$(Q)$(OBJDUMP) -d -M intel -S $< > $@
-
-.PHONY: test
-test: $(OUT_DIR)/skeleton_msqueue
-	@echo "Running basic tests..."
-	@echo ""
-	@echo "Test 1: Skeleton MS Queue - 5 second sleep"
-	sudo $(OUT_DIR)/skeleton_msqueue -d 5 || (echo "FAILED: skeleton_msqueue"; exit 1)
-	@echo ""
-	@echo "All tests passed!"
-
-.PHONY: test-stress
-
-test-stress: $(OUT_DIR)/skeleton_msqueue
-	@echo "Running stress tests..."
-	@echo "This may take a few minutes..."
-	@echo ""
-	@echo "Stress test 1: Skeleton MS Queue - 30 second sleep"
-	sudo $(OUT_DIR)/skeleton_msqueue -d 30 || (echo "FAILED"; exit 1)
-	@echo ""
-	@echo "Stress tests passed!"
-
-.PHONY: test-verify
-
-test-verify: $(OUT_DIR)/skeleton_msqueue
-	@echo "Running verification tests..."
-	@echo ""
-	@echo "Test 1: Skeleton MS Queue with verification"
-	sudo $(OUT_DIR)/skeleton_msqueue -d 5 -v || (echo "FAILED"; exit 1)
-	@echo "Verification tests passed!"
 
 # ============================================================================
 # HELP TARGET
@@ -244,37 +200,16 @@ test-verify: $(OUT_DIR)/skeleton_msqueue
 
 .PHONY: help
 help:
-	@echo "BPF Arena Data Structure Testing Framework"
-	@echo ""
-	@echo "Prerequisites:"
-	@echo "  - Linux kernel 6.10+ (see kernel/configs/delta-bpf-arena.config;"
-	@echo "    check yours with: python3 scripts/check_kconfig.py)"
-	@echo "  - LLVM/Clang 15+ with BPF support (clang-20 recommended)"
-	@echo "  - libelf and zlib (libbpf and bpftool are vendored in third_party/)"
-	@echo "  - Initialize third-party submodules: git submodule update --init --recursive"
-	@echo ""
 	@echo "Targets:"
-	@echo "  all          Build all programs (default)"
-	@echo "  usertest     Build only the userspace-only pthread tests"
-	@echo "  clean        Remove all build artifacts"
-	@echo "  test         Run basic smoke tests"
-	@echo "  test-stress  Run stress tests"
-	@echo "  test-verify  Run verification tests (uses -v)"
-	@echo "  help         Show this help message"
+	@echo "  all        Build all relays and usertests into $(OUT_DIR)/ (default)"
+	@echo "  usertest   Build only the userspace-only pthread tests"
+	@echo "  asm        Disassemble the relays into $(OUT_DIR)/*.S"
+	@echo "  clean      Remove $(OUT_DIR)/ and .output/"
 	@echo ""
-	@echo "Options:"
-	@echo "  V=1          Verbose build output"
+	@echo "  V=1        Verbose build output"
 	@echo ""
-	@echo "Examples:"
-	@echo "  make                    # Build everything (binaries placed in $(OUT_DIR))"
-	@echo "  make clean && make      # Clean build"
-	@echo "  make V=1 skeleton_msqueue       # Verbose build of skeleton MS Queue"
-	@echo "  make test               # Run smoke tests (invokes built binaries under $(OUT_DIR))"
-	@echo "  sudo $(OUT_DIR)/skeleton_msqueue     # Run the skeleton MS Queue test (interactive)"
-	@echo "  sudo $(OUT_DIR)/skeleton_msqueue -v  # Run with verification on exit"
-	@echo ""
-	@echo "Build here first, unprivileged; then run the full pipeline:"
-	@echo "  sudo python3 scripts/run_all.py      # it compiles nothing itself"
+	@echo "Build unprivileged, then run the pipeline (it compiles nothing):"
+	@echo "  make && sudo python3 scripts/run_all.py"
 
 # ============================================================================
 # MAKE DIRECTIVES

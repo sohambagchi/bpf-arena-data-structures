@@ -8,7 +8,7 @@ set -Eeuo pipefail
 #
 #   --base defconfig   'make defconfig', then merge the fragment (default)
 #   --base running     this machine's current config, then merge the fragment
-#   --base full        the paper's reference 6.18.2 .config, verbatim
+#   --base full        the reference 6.18.2 .config, verbatim
 #   --config PATH      an explicit .config (or config.gz) as the base, then
 #                      merge the fragment. Use this inside a container, where
 #                      the host's config is not visible: see KERNEL_CONFIG.
@@ -135,7 +135,7 @@ case "$BASE" in
         "Valid values:" \
         "  defconfig  'make defconfig', then append the BPF fragment (default)" \
         "  running    this machine's current config, then append the fragment" \
-        "  full       the paper's reference 6.18.2 .config, used verbatim" \
+        "  full       the reference 6.18.2 .config, used verbatim" \
         "" \
         "To start from a config that is not one of those, pass it directly:" \
         "  $0 --config /path/to/config" ;;
@@ -158,24 +158,11 @@ step "Preflight checks"
 ARCH="$(uname -m)"
 [[ "$ARCH" == "x86_64" ]] || die 2 "unsupported architecture: ${ARCH}" \
     "The configs in kernel/configs/ are x86 configs and this script assumes" \
-    "arch/x86/boot/bzImage. Cross-compiling is out of scope here." \
-    "" \
-    "ae.tex states the artifact targets x86-64 Linux."
+    "arch/x86/boot/bzImage; this artifact targets x86-64 Linux."
 
 if [[ -e /etc/NIXOS ]] && ((DO_INSTALL)); then
-    die 2 "this looks like NixOS, where 'make modules_install install' does not work" \
-        "NixOS manages kernels declaratively; there is no /boot layout for" \
-        "installkernel to write into." \
-        "" \
-        "Use the flake instead -- it builds this same kernel from the same config:" \
-        "" \
-        "  nix build .#kernel     # bzImage + modules in the store" \
-        "  nix run   .#vm         # boot it in QEMU, repo mounted at /repo" \
-        "" \
-        "To boot it on the host, set in your configuration.nix:" \
-        "  boot.kernelPackages = pkgs.linuxPackagesFor <this flake>.packages.\${system}.kernel;" \
-        "" \
-        "Or re-run this script with --no-install to build the tree only."
+    die 2 "NixOS manages kernels declaratively; 'make install' has nothing to write into" \
+        "Use 'nix build .#kernel' or 'nix run .#vm', or re-run with --no-install."
 fi
 
 REQUIRED_TOOLS=(
@@ -279,13 +266,7 @@ fi
 
 if [[ "$BASE" == "file" ]]; then
     [[ -r "$BASE_CONFIG" ]] || die 7 "cannot read the config given with --config: ${BASE_CONFIG}" \
-        "Give a path to a kernel .config, or to a gzipped one (config.gz)." \
-        "" \
-        "Inside a container, copy the host's config in before building:" \
-        "  # on the host" \
-        "  cp \"/boot/config-\$(uname -r)\" ./host.config" \
-        "  # in the container, with the repo bind-mounted" \
-        "  ./scripts/build-kernel.sh --config ./host.config --no-install"
+        "Give a path to a kernel .config, or to a gzipped one (config.gz)."
     RUNNING_CONFIG="$BASE_CONFIG"
     ok "base config: ${RUNNING_CONFIG}"
 fi
@@ -303,34 +284,12 @@ if [[ "$BASE" == "running" ]]; then
         [[ -n "$cand" ]] && [[ -r "$cand" ]] && { RUNNING_CONFIG="$cand"; break; }
     done
     if [[ -z "$RUNNING_CONFIG" ]] && in_container; then
-        die 7 "--base running does not work in a container: the host's config is not visible here" \
-            "A container shares the host's kernel but not its /boot, so" \
-            "'/boot/config-\$(uname -r)' names a file that is not mounted." \
-            "" \
-            "Pick one:" \
-            "" \
-            "  1. Mount the host's /boot read-only when starting the container:" \
-            "       docker run --rm -it -v \"\$PWD:/artifact\" -v /boot:/host/boot:ro bpf-arena-ds" \
-            "     then '--base running' finds it at /host/boot/ by itself." \
-            "" \
-            "  2. Copy the config in and point at it:" \
-            "       cp \"/boot/config-\$(uname -r)\" ./host.config     # on the host" \
-            "       ./scripts/build-kernel.sh --config ./host.config  # in the container" \
-            "" \
-            "  3. Use '--base full' (the paper's reference config) or '--base defconfig'," \
-            "     which need nothing from the host." \
-            "" \
-            "Note that installing is a host operation too -- add --no-install here and" \
-            "boot the resulting bzImage under QEMU, or install it from the host."
+        die 7 "--base running needs the host's /boot, which is not mounted in this container" \
+            "Start it with -v /boot:/host/boot:ro, or use --config PATH / --base full."
     fi
-    [[ -n "$RUNNING_CONFIG" ]] || die 7 "--base running, but this machine's kernel config is not readable" \
-        "Looked for:" \
-        "  /boot/config-$(uname -r)" \
-        "  /proc/config.gz  (needs CONFIG_IKCONFIG_PROC=y)" \
-        "  /lib/modules/$(uname -r)/build/.config" \
-        "" \
-        "Point at it directly with '--config PATH' if it lives somewhere else," \
-        "or use '--base defconfig' or '--base full' instead."
+    [[ -n "$RUNNING_CONFIG" ]] || die 7 "this machine's kernel config is not readable" \
+        "Looked for /boot/config-$(uname -r), /proc/config.gz and" \
+        "/lib/modules/$(uname -r)/build/.config. Use --config PATH or --base full."
     ok "base config: ${RUNNING_CONFIG}"
 fi
 
@@ -347,21 +306,9 @@ host_dir_mounted() {
 if ((DO_INSTALL)) && in_container \
    && ! { host_dir_mounted /boot && host_dir_mounted /lib/modules; }; then
     die 2 "refusing to install a kernel from inside a container" \
-        "'make modules_install install' would write to the container's own" \
-        "/lib/modules and /boot, which vanish with the container -- and the" \
-        "container cannot reboot the host into the result anyway." \
-        "" \
-        "If you did mean to install onto the host, bind-mount both first:" \
-        "  docker run --rm -it -v \"\$PWD:/artifact\" \\" \
-        "    -v /boot:/boot -v /lib/modules:/lib/modules bpf-arena-ds" \
-        "" \
-        "Build here and install from the host:" \
-        "  ./scripts/build-kernel.sh --base ${BASE} --no-install --workdir /artifact/kernel/build" \
-        "" \
-        "then, on the host, in the same directory:" \
-        "  cd kernel/build/linux-${KERNEL_VERSION} && sudo make modules_install && sudo make install" \
-        "" \
-        "Or boot the bzImage under QEMU without installing it at all."
+        "Its /boot and /lib/modules vanish with the container, and it cannot" \
+        "reboot the host. Re-run with --no-install, then install from the host:" \
+        "  cd kernel/build/linux-${KERNEL_VERSION} && sudo make modules_install && sudo make install"
 fi
 
 mkdir -p "$WORKDIR" 2>/dev/null || die 4 "cannot create work directory: ${WORKDIR}" \
@@ -370,7 +317,7 @@ avail_gb="$(df -BG --output=avail "$WORKDIR" 2>/dev/null | tail -n1 | tr -dc '0-
 if [[ -n "$avail_gb" ]] && ((avail_gb < REQUIRED_GB)); then
     die 4 "not enough free disk space in ${WORKDIR}" \
         "Available: ${avail_gb} GB" \
-        "Required:  ${REQUIRED_GB} GB (ae.tex budgets ~20 GB for a kernel build)" \
+        "Required:  ${REQUIRED_GB} GB" \
         "" \
         "Free some space, or build elsewhere:  $0 --workdir /path/with/room"
 fi
@@ -383,35 +330,23 @@ ok "jobs: -j${JOBS}"
 if ((DO_INSTALL)) && ((!ASSUME_YES)); then
     cat <<EOF
 
-${C_YEL}This will build Linux ${KERNEL_VERSION}${LOCALVERSION} and then install it:${C_OFF}
+${C_YEL}This builds Linux ${KERNEL_VERSION}${LOCALVERSION} and installs it:${C_OFF}
 
   source     ${SRCDIR}
   base       ${BASE}${RUNNING_CONFIG:+  (${RUNNING_CONFIG})}
   modules -> /lib/modules/${KERNEL_VERSION}${LOCALVERSION}/
-  kernel  -> /boot/  (via 'make install', which runs your distro's
-             installkernel hook and usually regenerates the bootloader menu)
+  kernel  -> /boot/
 
-Your current kernel is NOT removed or overwritten -- the new one installs
-alongside it under a distinct version string, and you pick it at boot.
-
-Expect 20-60 minutes and a sudo password prompt at the install step.
+Your current kernel is left alone; the new one installs alongside it under a
+distinct version string. Expect 20-60 minutes and a sudo prompt at the end.
 EOF
     if [[ "$BASE" == "defconfig" ]]; then
-        cat <<EOF
-
-${C_RED}Note on --base defconfig:${C_OFF} defconfig is a generic, minimal x86 config.
-It may lack drivers your root filesystem or storage controller needs, in which
-case the installed kernel will not boot on this machine (your existing kernel
-still will). If you intend to boot this on real hardware, prefer:
-
-  $0 --base running
-
-which starts from the config this machine is running now.
-EOF
+        printf '\n%sdefconfig is generic x86 and may lack drivers this machine needs\n' "$C_RED"
+        printf 'to boot. Prefer --base running for real hardware.%s\n' "$C_OFF"
     fi
     printf '\nProceed? [y/N] '
     read -r reply </dev/tty || die 1 "no terminal available to confirm" \
-        "Re-run with -y to skip this prompt, or with --no-install."
+        "Re-run with -y to skip this prompt."
     [[ "$reply" =~ ^[Yy]$ ]] || { printf 'Aborted.\n'; exit 0; }
 fi
 
@@ -541,14 +476,8 @@ step "Verifying .config against the artifact's requirements"
 
 if ! python3 "$CHECK_KCONFIG" .config; then
     die 8 "the resulting .config does not satisfy the artifact's requirements" \
-        "check_kconfig.py named the missing symbols above." \
-        "" \
-        "This usually means a symbol in the fragment was overridden by a" \
-        "dependency it does not select. Inspect and fix interactively:" \
-        "" \
-        "  cd '${SRCDIR}' && make menuconfig" \
-        "" \
-        "then re-run this script -- it reuses the extracted tree."
+        "check_kconfig.py named the missing symbols above. Fix them with" \
+        "'cd ${SRCDIR} && make menuconfig', then re-run (the tree is reused)."
 fi
 ok "all requirements met"
 
@@ -621,43 +550,21 @@ $SUDO make -j"$JOBS" modules_install || die 10 "'make modules_install' failed" \
     "Check with:  df -h /lib/modules"
 
 $SUDO make install || die 10 "'make install' failed" \
-    "This step calls your distribution's installkernel hook, which copies the" \
-    "kernel into /boot and usually regenerates the bootloader configuration." \
-    "" \
-    "Common causes:" \
-    "  - /boot is too small (check:  df -h /boot)" \
-    "  - no /sbin/installkernel and no kernel-install on this distro" \
-    "" \
-    "The modules are already installed, so you can finish by hand:" \
+    "Usual causes: /boot is too small (df -h /boot), or the distro has no" \
+    "installkernel hook. The modules are installed, so you can finish by hand:" \
     "  cd '${SRCDIR}'" \
     "  sudo cp arch/x86/boot/bzImage /boot/vmlinuz-${KERNEL_VERSION}${LOCALVERSION}" \
     "  sudo cp System.map /boot/System.map-${KERNEL_VERSION}${LOCALVERSION}" \
-    "  sudo cp .config /boot/config-${KERNEL_VERSION}${LOCALVERSION}" \
-    "  # then regenerate your bootloader menu (update-grub, grub2-mkconfig, ...)"
+    "  sudo cp .config /boot/config-${KERNEL_VERSION}${LOCALVERSION}"
 
 cat <<EOF
 
 ${C_GRN}Installed Linux ${KERNEL_VERSION}${LOCALVERSION}.${C_OFF}
 
-  modules  /lib/modules/${KERNEL_VERSION}${LOCALVERSION}/
-  kernel   /boot/vmlinuz-${KERNEL_VERSION}${LOCALVERSION}
-  config   /boot/config-${KERNEL_VERSION}${LOCALVERSION}
-
-If your bootloader menu was not regenerated automatically, do it now:
-
-  Debian/Ubuntu:  sudo update-grub
-  Fedora/RHEL:    sudo grubby --info=ALL   # verify the entry exists
-  Arch:           sudo grub-mkconfig -o /boot/grub/grub.cfg
-
-Then reboot into it and confirm:
+If the bootloader menu was not regenerated, run 'sudo update-grub'. Then
+reboot into the new entry and confirm:
 
   uname -r                                  # ${KERNEL_VERSION}${LOCALVERSION}
   cat /sys/kernel/security/lsm              # must contain 'bpf'
   python3 scripts/check_kconfig.py          # OK: all requirements met
-  cd '${REPO_ROOT}' && make && sudo python3 scripts/run_all.py
-
-If 'bpf' is missing from the LSM list after reboot, add it to your kernel
-command line -- no rebuild needed:
-
-  lsm=landlock,lockdown,yama,loadpin,safesetid,integrity,bpf
 EOF

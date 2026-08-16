@@ -43,7 +43,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         binutils-dev \
         libcap-dev \
         python3 \
-        python3-networkx \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CLANG=clang-${LLVM_VERSION}

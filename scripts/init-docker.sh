@@ -2,36 +2,26 @@
 set -Eeuo pipefail
 
 # USAGE-START
-# scripts/run-docker.sh -- run this artifact in a BPF-capable container
+# scripts/init-docker.sh -- run this artifact in a BPF-capable container
 #
-# `docker run -v "$PWD:/artifact" bpf-arena-ds` gives you the toolchain and
-# nothing else: the relays fail there because the container is isolated from
-# the very things they need, not because the image is missing a package.
-# Being root inside the container is not enough.  This wrapper adds the four
-# things a plain `docker run` leaves out:
+# A plain `docker run` cannot load BPF programs however root you are inside it.
+# This wrapper adds what it leaves out: the capabilities (and the seccomp
+# profile lifted, since it blocks bpf(2)), the /sys/kernel/debug, /sys/fs/bpf,
+# /sys/kernel/security and /boot mounts, and the host PID namespace.
 #
-#   1. privileges -- CAP_BPF/CAP_PERFMON for bpf(2), and the default seccomp
-#      profile lifted, since it blocks bpf(2) outright
-#   2. /sys/kernel/debug -- trace_pipe, which runner.py reads and clears
-#   3. /sys/fs/bpf, /sys/kernel/security -- bpffs, and the LSM list that
-#      check_kconfig.py reads to prove the BPF LSM is actually active
-#   4. /boot -- so check_kconfig.py can find /boot/config-$(uname -r); without
-#      it the pipeline stops on "no config given and none found"
+# It cannot supply a kernel: a container shares the host's, so the host must
+# already satisfy scripts/check_kconfig.py -- which the preflight below checks.
 #
-# It cannot supply a kernel.  A container shares the host's, so the *host* must
-# already satisfy scripts/check_kconfig.py; the preflight below says so up
-# front instead of letting eight relays fail one at a time.
+# usage: scripts/init-docker.sh [options] [-- command ...]
 #
-# usage: scripts/run-docker.sh [options] [-- command ...]
+#   with no command you get an interactive shell in /artifact; with one, it
+#   runs and the container exits:
 #
-#   with no command, you get an interactive shell in /artifact; with one, it
-#   runs and the container exits, e.g.
+#       scripts/init-docker.sh -- python3 scripts/run_all.py
 #
-#       scripts/run-docker.sh -- python3 scripts/run_all.py
-#
-#       --restricted     instead of --privileged, drop every capability and add
-#                        back only BPF, PERFMON, SYS_ADMIN, DAC_OVERRIDE and
-#                        SYS_RESOURCE, with seccomp and AppArmor unconfined
+#       --restricted     drop every capability and add back only BPF, PERFMON,
+#                        SYS_ADMIN, DAC_OVERRIDE and SYS_RESOURCE, instead of
+#                        --privileged
 #       --image NAME     image to run (default: bpf-arena-ds)
 #       --build          docker build the image first
 #       --no-check       run even if the host preflight fails
@@ -39,10 +29,8 @@ set -Eeuo pipefail
 #   -h, --help           this text
 #
 # exit codes:
-#   2  unsupported platform (not Linux)
-#   3  docker missing, or the daemon is unreachable
-#   4  the host kernel cannot run the relays (see the report)
-#   5  the image does not exist and --build was not given
+#   2  not Linux    3  docker missing or unreachable
+#   4  the host kernel cannot run the relays    5  no such image
 # USAGE-END
 
 # ---------------------------------------------------------------------------
@@ -50,22 +38,10 @@ set -Eeuo pipefail
 # ---------------------------------------------------------------------------
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# --restricted drops every capability and adds back only these, so each one is
-# here because removing it was observed to break something:
-#
-#   BPF, PERFMON    load the programs and open the perf events
-#   SYS_ADMIN       the documented BPF+PERFMON pair is *not* enough: with only
-#                   those two the programs load and then attach dies on
-#                   "failed to create uprobe '/proc/self/exe:0x8174' perf
-#                   event: -EACCES"
-#   DAC_OVERRIDE    root in the container is uid 0, but the bind-mounted
-#                   checkout belongs to your host user; without it runner.py's
-#                   workers fail on "touch: cannot touch 'file0.tmp':
-#                   Permission denied" and no CSV is written
-#   SYS_RESOURCE    RLIMIT_MEMLOCK, which libbpf still raises on its legacy
-#                   path.  The relays passed without it on 6.18 (BPF memory is
-#                   memcg-accounted there); kept for older kernels, where that
-#                   limit does gate map creation.
+# Each of these was observed to be load-bearing: BPF/PERFMON load the programs
+# and open the perf events, SYS_ADMIN is additionally required for the uprobe
+# perf events, DAC_OVERRIDE lets uid 0 write the bind-mounted checkout, and
+# SYS_RESOURCE covers RLIMIT_MEMLOCK on kernels older than 6.18.
 RESTRICTED_CAPS=(BPF PERFMON SYS_ADMIN DAC_OVERRIDE SYS_RESOURCE)
 
 # ---------------------------------------------------------------------------
@@ -142,10 +118,8 @@ done
 # ---------------------------------------------------------------------------
 [[ "$(uname -s)" == "Linux" ]] || die 2 \
     "this wrapper only works on a Linux host (this one is $(uname -s))" \
-    "A container shares the host's kernel, so on macOS or Windows the relays" \
-    "would run against Docker Desktop's LinuxKit VM, not a kernel built from" \
-    "kernel/configs/delta-bpf-arena.config.  Use a Linux machine, or the Nix" \
-    "route: nix run .#vm"
+    "On macOS/Windows the container runs against Docker Desktop's LinuxKit VM," \
+    "not a kernel you built."
 
 step "Checking Docker"
 command -v docker >/dev/null 2>&1 || die 3 \
@@ -155,9 +129,8 @@ command -v docker >/dev/null 2>&1 || die 3 \
 
 if ! docker info >/dev/null 2>&1; then
     die 3 "the Docker daemon is unreachable" \
-        "Either it is not running (sudo systemctl start docker), or your user" \
-        "is not in the docker group (log out and back in after being added)." \
-        "Check with: docker info"
+        "Start it (sudo systemctl start docker), or check that you are in the" \
+        "docker group. Check with: docker info"
 fi
 ok "docker $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo '(version unknown)')"
 
@@ -176,9 +149,8 @@ if [[ -r /sys/kernel/security/lsm ]]; then
         ok "BPF LSM active: $(cat /sys/kernel/security/lsm)"
     else
         bad "BPF LSM not active: $(cat /sys/kernel/security/lsm)"
-        PROBLEMS+=("The BPF LSM is not in the active list, so every lsm.s program"
-                   "  will fail to attach.  An lsm= kernel command line replaces"
-                   "  CONFIG_LSM outright; get the line to add with:"
+        PROBLEMS+=("The BPF LSM is inactive, so no lsm.s program can attach. Get the"
+                   "  kernel command line to add with:"
                    "    python3 scripts/check_kconfig.py --print-lsm-fix")
     fi
 elif [[ -d /sys/kernel/security ]]; then
@@ -194,9 +166,8 @@ if [[ -e /sys/kernel/btf/vmlinux ]]; then
     ok "host BTF present (/sys/kernel/btf/vmlinux)"
 else
     bad "no host BTF"
-    PROBLEMS+=("/sys/kernel/btf/vmlinux is missing, so the lsm.s and uprobe.s"
-               "  programs cannot be attached.  The host kernel needs"
-               "  CONFIG_DEBUG_INFO_BTF=y -- it is not something the image can add.")
+    PROBLEMS+=("/sys/kernel/btf/vmlinux is missing; the host kernel needs"
+               "  CONFIG_DEBUG_INFO_BTF=y.")
 fi
 
 if is_mounted /sys/kernel/debug || [[ -d /sys/kernel/debug/tracing ]]; then
@@ -233,8 +204,7 @@ if [[ -n "$KERNEL_CONFIG_SRC" ]]; then
 else
     bad "no kernel config to check"
     PROBLEMS+=("check_kconfig.py needs /boot/config-\$(uname -r) or /proc/config.gz;"
-               "  neither exists on this host.  Point it at a copy instead:"
-               "    scripts/run-docker.sh -- python3 scripts/run_all.py --config path/to/.config")
+               "  neither exists here. Point it at a copy with --config path/to/.config")
 fi
 
 if ((${#PROBLEMS[@]} > 0)); then
@@ -243,13 +213,9 @@ if ((${#PROBLEMS[@]} > 0)); then
     else
         die 4 "this host cannot run the relays" "${PROBLEMS[@]}" \
             "" \
-            "A container cannot fix any of these: it shares the host's kernel." \
-            "Build and boot a compliant one first (README step 2):" \
-            "  ./scripts/build-kernel.sh --base running -y" \
-            "" \
-            "To run anyway -- for the compile and usertest halves, which do not" \
-            "need any of the above -- pass --no-check, or skip this wrapper:" \
-            "  docker run --rm -it -v \"\$PWD:/artifact\" $IMAGE"
+            "A container shares the host's kernel and cannot fix these. Build and" \
+            "boot one first:  ./scripts/build-kernel.sh --base running -y" \
+            "For the compile and usertest halves only, pass --no-check."
     fi
 fi
 
@@ -266,7 +232,7 @@ if ((DO_BUILD)); then
 elif ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     die 5 "no such image: $IMAGE" \
         "Build it first:" \
-        "  scripts/run-docker.sh --build" \
+        "  scripts/init-docker.sh --build" \
         "or by hand:" \
         "  docker build -t $IMAGE $REPO_ROOT"
 fi
@@ -319,10 +285,7 @@ if ((DRY_RUN)); then
 fi
 
 if ((${#COMMAND[@]} == 0)); then
-    info ""
-    info "You are root in /artifact.  The pipeline is:"
-    info "  make                        # if build/ is empty"
-    info "  python3 scripts/run_all.py  # no sudo needed, you are already root"
+    info "root in /artifact:  make && python3 scripts/run_all.py"
 fi
 
 exec docker "${DOCKER_ARGS[@]}"
