@@ -32,6 +32,12 @@
         libbfd
         libopcodes
         libcap
+        # llvm-config lives in the 'dev' output, and bpftool's feature probe
+        # runs it to find llvm-c/Core.h and libLLVM. Without it the probe
+        # reports 'llvm: [ OFF ]' and bpftool falls back to libbfd for JIT
+        # disassembly. artifactTools' llvmPackages_20.llvm ('out') does not
+        # carry it -- that output has clang and llvm-strip, not llvm-config.
+        llvmPackages_20.llvm.dev
       ];
 
       kernelTools = pkgs: with pkgs; [
@@ -102,7 +108,7 @@
             echo "  gcc   : $(gcc  --version | head -n1)"
             echo "  python: $(python3 --version)"
             echo "  kernel: bison flex bc pahole qemu on PATH"
-            echo "  libs  : libbfd/libopcodes + libcap (full bpftool: jited dump, feature probe)"
+            echo "  libs  : LLVM + libbfd/libopcodes + libcap (full bpftool: jited dump, feature probe)"
             echo
             echo "  build : git submodule update --init --recursive && make"
             echo "  run   : sudo python3 scripts/run_all.py   (build first: it compiles nothing)"

@@ -49,9 +49,19 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 ENV CLANG=clang-${LLVM_VERSION}
 ENV CC=gcc
 
+# apt.llvm.org installs only version-suffixed names in /usr/bin (llvm-config-20,
+# llvm-strip-20, ...), but bpftool's Makefile.include looks for the unversioned
+# llvm-config and llvm-strip -- so its feature probe reported 'llvm: [ OFF ]'
+# and the full-bpftool build died on 'llvm-strip: No such file or directory',
+# even though LLVM 20's headers and libLLVM were already in the image.
+# /usr/lib/llvm-20/bin holds the same tools under their unversioned names;
+# appended, not prepended, so it shadows nothing already on PATH.
+ENV PATH="${PATH}:/usr/lib/llvm-${LLVM_VERSION}/bin"
+
 WORKDIR /artifact
 
-RUN "${CLANG}" --version && gcc --version && python3 --version
+RUN "${CLANG}" --version && gcc --version && python3 --version \
+    && llvm-config --version && llvm-strip --version | head -n 1
 
 # ---------------------------------------------------------------------------
 # Stage 2: verify -- compile the artifact so a broken image cannot ship
@@ -68,6 +78,15 @@ RUN make \
 
 # ---------------------------------------------------------------------------
 # Stage 3: kernel-tools -- build and boot Linux 6.18 with this repo's config
+#
+#   docker run --rm -it -v "$PWD:/artifact" -v /boot:/host/boot:ro bpf-arena-ds
+#   ./scripts/build-kernel.sh --base running --no-install
+#
+# The /host/boot mount is what makes --base running work here: a container
+# shares the host's kernel but not its /boot, so the config named by uname -r
+# is otherwise unreadable. Without it, use --config PATH or --base full.
+# --no-install because installing is a host operation; boot the resulting
+# bzImage under QEMU (installed below) instead.
 # ---------------------------------------------------------------------------
 FROM toolchain AS kernel-tools
 

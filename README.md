@@ -97,6 +97,11 @@ want when booting the result on real hardware. Other flags:
 - `--base full` — the paper's reference `.config`
   (`kernel/configs/full-6.18.2-bpf.config`), verbatim.
 - `--base defconfig` (default) — generic x86.
+- `--config PATH` — any other `.config` (or gzipped `config.gz`) as the base,
+  with the BPF fragment merged on top. `KERNEL_CONFIG=PATH` does the same. This
+  is the way to get `--base running` behaviour inside a container, which cannot
+  see the host's `/boot`; see
+  [below](#--base-running-does-not-work-inside-the-container).
 - `-y` — skip the confirmation prompt. `-j N` — parallelism (default: `nproc`).
   `--no-install` — build only, touch nothing outside the tree.
 
@@ -346,6 +351,10 @@ userspace half is meaningful there — a container shares the host's kernel, so
 the relays run only if the *host* satisfies `check_kconfig.py`; see the
 [FAQ](#why-does-the-bpf-half-not-work-under-docker).
 
+To build a kernel in the container too, add `-v /boot:/host/boot:ro` so
+`--base running` can reach the host's config, and pass `--no-install` — see
+[the FAQ entry](#--base-running-does-not-work-inside-the-container).
+
 Needs BuildKit with the buildx plugin (`# syntax=` and `RUN --mount=type=cache`
 above), and the submodules checked out. If Docker is not installed yet, run
 `scripts/install-docker.sh` on Ubuntu or see `DOCKER_NIX_INSTALL.md`, which
@@ -362,8 +371,8 @@ the system is overwritten, and the existing kernel remains bootable.
 - Linux kernel 6.10+, configured per `kernel/configs/delta-bpf-arena.config` (below)
 - Clang/LLVM with BPF target support (the Makefile defaults to `clang-20`, with fallback to `clang`)
 - `libelf`, `zlib`, `gcc`, `make`
-- `libbfd` (plus `libopcodes`) and `libcap` — not needed by `make`, needed for a
-  full `bpftool`; see [below](#libbfd-and-libcap)
+- LLVM development files, `libbfd` (plus `libopcodes`) and `libcap` — not needed
+  by `make`, needed for a full `bpftool`; see [below](#libbfd-and-libcap)
 - root privileges for loading/attaching BPF programs
 
 For a fast setup path, see `QUICKSTART.md`.
@@ -380,23 +389,28 @@ host instead:
 | OpenSSL | `libssl-dev` | `openssl-devel` | `openssl` |
 | libbfd + libopcodes | `binutils-dev` | `binutils-devel` | `binutils` |
 | libcap | `libcap-dev` | `libcap-devel` | `libcap` |
+| LLVM (`llvm-config`) | `llvm-dev` | `llvm-devel` | `llvm` |
 
 ```bash
 # Debian/Ubuntu
 sudo apt-get install -y build-essential pkg-config \
-    libelf-dev zlib1g-dev libssl-dev binutils-dev libcap-dev
+    libelf-dev zlib1g-dev libssl-dev binutils-dev libcap-dev llvm-dev
 
 # Fedora/RHEL
 sudo dnf install -y gcc make pkgconf-pkg-config \
-    elfutils-libelf-devel zlib-devel openssl-devel binutils-devel libcap-devel
+    elfutils-libelf-devel zlib-devel openssl-devel binutils-devel libcap-devel \
+    llvm-devel
 
 # Arch
 sudo pacman -S --needed base-devel pkgconf \
-    libelf zlib openssl binutils libcap
+    libelf zlib openssl binutils libcap llvm
 ```
 
 Arch ships `bfd.h` and `sys/capability.h` in the runtime packages; Debian and
-Fedora split them into the `-dev`/`-devel` packages above.
+Fedora split them into the `-dev`/`-devel` packages above. Distribution `llvm-dev`
+packages provide an unversioned `llvm-config`; the versioned ones from
+`apt.llvm.org` do not, which is what the `Dockerfile`'s `PATH` entry works
+around.
 
 `scripts/build-kernel.sh` checks its own dependencies before it starts and names
 the missing package for apt/dnf/pacman, so the kernel step needs no list kept in
@@ -411,13 +425,37 @@ Upstream's Makefile feature-tests both and, when they are absent, drops the
 dependent features silently rather than failing the build, so the result is a
 `bpftool` quietly missing:
 
-- `bpftool prog dump jited` — JIT disassembly, from `libbfd` and `libopcodes`
+- `bpftool prog dump jited` — JIT disassembly, from LLVM, or from `libbfd` and
+  `libopcodes` as the fallback
 - the capability half of `bpftool feature probe` — from `libcap`
 
 Those two are the usual first stop when a program loads on one machine and not
 another, which is why both packaged environments carry them rather than leaving
 them to be discovered mid-debug. `libcap` also brings `setcap`, if you would
 rather grant a relay `CAP_BPF`/`CAP_PERFMON` than run it as root.
+
+The `make` output starts with bpftool's own feature table, which is where you
+see what it found:
+
+```
+...                        libbfd: [ on  ]
+...               clang-bpf-co-re: [ on  ]
+...                          llvm: [ on  ]
+...                        libcap: [ on  ]
+```
+
+`llvm` is the one that takes an extra step in each environment, because bpftool
+looks for an *unversioned* `llvm-config` (and `llvm-strip`, for the full build).
+`apt.llvm.org` installs only `llvm-config-20`, so the `Dockerfile` appends
+`/usr/lib/llvm-20/bin` — where the unversioned names live — to `PATH`. In
+nixpkgs `llvm-config` sits in the `dev` output, so the flake asks for
+`llvmPackages_20.llvm.dev` explicitly; the plain `llvm` package has `clang` and
+`llvm-strip` but not `llvm-config`. Either way the fix costs nothing: the
+headers and `libLLVM` were already installed in both.
+
+An `llvm: [ OFF ]` line does not affect anything this repo builds — `bpftool
+bootstrap` excludes `jit_disasm.c` — so it is only worth chasing if you want a
+full `bpftool` out of the environment.
 
 Note that `bfd.h` refuses to be included on its own — `#error config.h must be
 included before this header`. bpftool's own `-DPACKAGE='"bpftool"'` satisfies
@@ -592,6 +630,43 @@ work at all — the host "kernel" there is Docker's own LinuxKit VM. To get a
 `./scripts/build-kernel.sh --no-install` and boot it under QEMU; see the header
 comment in `Dockerfile`. The equivalent on the Nix side is `nix run .#vm`,
 which skips steps 2 and 3 entirely.
+
+### `--base running` does not work inside the container
+
+A container shares the host's kernel but not its filesystem, so `uname -r` names
+the host kernel while `/boot/config-$(uname -r)` — the file `--base running`
+wants — is not mounted. Three ways out, in the order the script suggests them:
+
+```bash
+# 1. mount the host's /boot; --base running then finds it at /host/boot by itself
+docker run --rm -it -v "$PWD:/artifact" -v /boot:/host/boot:ro bpf-arena-ds
+
+# 2. copy the config in and point at it
+cp "/boot/config-$(uname -r)" ./host.config              # on the host
+./scripts/build-kernel.sh --config ./host.config \
+    --no-install                                         # in the container
+
+# 3. use a config that needs nothing from the host
+./scripts/build-kernel.sh --base full --no-install
+```
+
+`--base running` also still works untouched if the *host* kernel was built with
+`CONFIG_IKCONFIG_PROC=y`: `/proc/config.gz` is the running kernel's own config
+and is visible in the container, since `/proc` is the same kernel's procfs. The
+script checks it before giving up.
+
+Installing is a host operation regardless of the config — `make modules_install
+install` inside a container writes into `/lib/modules` and `/boot` that are
+discarded when it exits, and a container cannot reboot the host into the result.
+So `build-kernel.sh` refuses to install from inside one unless both directories
+are bind-mounted from the host (`-v /boot:/boot -v /lib/modules:/lib/modules`).
+Pass `--no-install`, then either install from the host side of the bind mount:
+
+```bash
+cd kernel/build/linux-6.18.44 && sudo make modules_install && sudo make install
+```
+
+or skip installing entirely and boot the `bzImage` under QEMU.
 
 ### `build-kernel.sh` refuses to install on NixOS
 

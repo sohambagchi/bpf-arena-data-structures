@@ -1,6 +1,31 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# build-kernel.sh -- download, configure, build and install Linux 6.18.44
+#                    with this repo's BPF-arena config fragment.
+#
+# usage: scripts/build-kernel.sh [options]
+#
+#   --base defconfig   'make defconfig', then merge the fragment (default)
+#   --base running     this machine's current config, then merge the fragment
+#   --base full        the paper's reference 6.18.2 .config, verbatim
+#   --config PATH      an explicit .config (or config.gz) as the base, then
+#                      merge the fragment. Use this inside a container, where
+#                      the host's config is not visible: see KERNEL_CONFIG.
+#   -j, --jobs N       parallelism (default: nproc)
+#   -w, --workdir DIR  where to download and build (default: kernel/build)
+#   --no-install       build only; touch nothing outside the source tree
+#   --no-keep          delete the tarball after extracting
+#   -y, --yes          skip the confirmation prompt
+#   -h, --help         this text
+#
+# environment:
+#   KERNEL_CONFIG      same as --config; the flag wins if both are given
+#
+# exit codes:
+#   1 usage      2 platform    3 dependencies   4 disk      5 download
+#   6 extract    7 configure   8 config check   9 compile  10 install
+#
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -21,6 +46,8 @@ CHECK_KCONFIG="${REPO_ROOT}/scripts/check_kconfig.py"
 # Defaults, overridable by flags
 # ---------------------------------------------------------------------------
 BASE="defconfig"
+BASE_CONFIG="${KERNEL_CONFIG:-}"
+[[ -n "$BASE_CONFIG" ]] && BASE="file"
 WORKDIR="${REPO_ROOT}/kernel/build"
 JOBS="$(nproc 2>/dev/null || echo 4)"
 DO_INSTALL=1
@@ -67,7 +94,7 @@ on_err() {
 trap 'on_err $LINENO' ERR
 
 usage() {
-    sed -n '3,20p' "${BASH_SOURCE[0]}" | sed 's/^#\s\?//'
+    sed -n '4,27p' "${BASH_SOURCE[0]}" | sed 's/^#\s\?//'
     exit "${1:-0}"
 }
 
@@ -81,6 +108,10 @@ while (($# > 0)); do
                 "Valid values: defconfig, running, full"
             BASE="$2"; shift 2 ;;
         --base=*)  BASE="${1#*=}"; shift ;;
+        --config)
+            [[ -n "${2:-}" ]] || die 1 "--config needs a path to a kernel .config"
+            BASE="file"; BASE_CONFIG="$2"; shift 2 ;;
+        --config=*) BASE="file"; BASE_CONFIG="${1#*=}"; shift ;;
         -j|--jobs)
             [[ "${2:-}" =~ ^[0-9]+$ ]] || die 1 "--jobs needs a positive integer" \
                 "Got: '${2:-}'"
@@ -99,12 +130,15 @@ while (($# > 0)); do
 done
 
 case "$BASE" in
-    defconfig|running|full) ;;
+    defconfig|running|full|file) ;;
     *) die 1 "unknown --base value: '$BASE'" \
         "Valid values:" \
         "  defconfig  'make defconfig', then append the BPF fragment (default)" \
         "  running    this machine's current config, then append the fragment" \
-        "  full       the paper's reference 6.18.2 .config, used verbatim" ;;
+        "  full       the paper's reference 6.18.2 .config, used verbatim" \
+        "" \
+        "To start from a config that is not one of those, pass it directly:" \
+        "  $0 --config /path/to/config" ;;
 esac
 
 ((DO_INSTALL)) || TOTAL_STEPS=6
@@ -220,7 +254,7 @@ probe_header "openssl/opensslv.h" "sign modules and build host tools"  "libssl-d
 ok "toolchain: gcc $(gcc -dumpversion), $(pahole --version 2>&1 | awk 'NR == 1 { first = $0 } END { print first }'), make $(make --version | awk 'NR == 1 { version = $3 } END { print version }')"
 
 case "$BASE" in
-    defconfig|running)
+    defconfig|running|file)
         [[ -r "$DELTA_CONFIG" ]] || die 1 "cannot read ${DELTA_CONFIG}" \
             "This script must run from inside a bpf-arena-data-structures checkout." \
             "Detected repo root: ${REPO_ROOT}" ;;
@@ -230,18 +264,104 @@ case "$BASE" in
             "Detected repo root: ${REPO_ROOT}" ;;
 esac
 
+# True for Docker, Podman and most other container runtimes. A container shares
+# the host's kernel, so 'uname -r' names a kernel whose /boot is not mounted.
+in_container() {
+    [[ -f /.dockerenv ]] || [[ -f /run/.containerenv ]] \
+        || [[ -n "${container:-}" ]] \
+        || grep -qE '(docker|containerd|libpod|kubepods)' /proc/1/cgroup 2>/dev/null
+}
+
+# Absolute, because step 5 runs after 'cd $SRCDIR'.
+if [[ -n "$BASE_CONFIG" ]] && [[ -e "$BASE_CONFIG" ]]; then
+    BASE_CONFIG="$(cd -- "$(dirname -- "$BASE_CONFIG")" && pwd)/$(basename -- "$BASE_CONFIG")"
+fi
+
+if [[ "$BASE" == "file" ]]; then
+    [[ -r "$BASE_CONFIG" ]] || die 7 "cannot read the config given with --config: ${BASE_CONFIG}" \
+        "Give a path to a kernel .config, or to a gzipped one (config.gz)." \
+        "" \
+        "Inside a container, copy the host's config in before building:" \
+        "  # on the host" \
+        "  cp \"/boot/config-\$(uname -r)\" ./host.config" \
+        "  # in the container, with the repo bind-mounted" \
+        "  ./scripts/build-kernel.sh --config ./host.config --no-install"
+    RUNNING_CONFIG="$BASE_CONFIG"
+    ok "base config: ${RUNNING_CONFIG}"
+fi
+
 if [[ "$BASE" == "running" ]]; then
     RUNNING_CONFIG=""
-    for cand in "/boot/config-$(uname -r)" /proc/config.gz; do
-        [[ -r "$cand" ]] && { RUNNING_CONFIG="$cand"; break; }
+    # KERNEL_CONFIG and /host/boot let a container be pointed at the host's
+    # config, which it cannot otherwise see. /proc/config.gz does work in a
+    # container -- same kernel -- but only if the host set CONFIG_IKCONFIG_PROC.
+    for cand in "${BASE_CONFIG:-}" \
+                "/host/boot/config-$(uname -r)" \
+                "/boot/config-$(uname -r)" \
+                /proc/config.gz \
+                "/lib/modules/$(uname -r)/build/.config"; do
+        [[ -n "$cand" ]] && [[ -r "$cand" ]] && { RUNNING_CONFIG="$cand"; break; }
     done
+    if [[ -z "$RUNNING_CONFIG" ]] && in_container; then
+        die 7 "--base running does not work in a container: the host's config is not visible here" \
+            "A container shares the host's kernel but not its /boot, so" \
+            "'/boot/config-\$(uname -r)' names a file that is not mounted." \
+            "" \
+            "Pick one:" \
+            "" \
+            "  1. Mount the host's /boot read-only when starting the container:" \
+            "       docker run --rm -it -v \"\$PWD:/artifact\" -v /boot:/host/boot:ro bpf-arena-ds" \
+            "     then '--base running' finds it at /host/boot/ by itself." \
+            "" \
+            "  2. Copy the config in and point at it:" \
+            "       cp \"/boot/config-\$(uname -r)\" ./host.config     # on the host" \
+            "       ./scripts/build-kernel.sh --config ./host.config  # in the container" \
+            "" \
+            "  3. Use '--base full' (the paper's reference config) or '--base defconfig'," \
+            "     which need nothing from the host." \
+            "" \
+            "Note that installing is a host operation too -- add --no-install here and" \
+            "boot the resulting bzImage under QEMU, or install it from the host."
+    fi
     [[ -n "$RUNNING_CONFIG" ]] || die 7 "--base running, but this machine's kernel config is not readable" \
         "Looked for:" \
         "  /boot/config-$(uname -r)" \
         "  /proc/config.gz  (needs CONFIG_IKCONFIG_PROC=y)" \
+        "  /lib/modules/$(uname -r)/build/.config" \
         "" \
-        "Use '--base defconfig' or '--base full' instead."
+        "Point at it directly with '--config PATH' if it lives somewhere else," \
+        "or use '--base defconfig' or '--base full' instead."
     ok "base config: ${RUNNING_CONFIG}"
+fi
+
+# Bind-mounting the host's /boot and /lib/modules into the container makes the
+# install step meaningful; without that it writes into a filesystem that is
+# discarded when the container exits.
+host_dir_mounted() {
+    local dir="$1" root_dev dir_dev
+    root_dev="$(stat -c %d / 2>/dev/null)" || return 1
+    dir_dev="$(stat -c %d "$dir" 2>/dev/null)" || return 1
+    [[ "$dir_dev" != "$root_dev" ]]
+}
+
+if ((DO_INSTALL)) && in_container \
+   && ! { host_dir_mounted /boot && host_dir_mounted /lib/modules; }; then
+    die 2 "refusing to install a kernel from inside a container" \
+        "'make modules_install install' would write to the container's own" \
+        "/lib/modules and /boot, which vanish with the container -- and the" \
+        "container cannot reboot the host into the result anyway." \
+        "" \
+        "If you did mean to install onto the host, bind-mount both first:" \
+        "  docker run --rm -it -v \"\$PWD:/artifact\" \\" \
+        "    -v /boot:/boot -v /lib/modules:/lib/modules bpf-arena-ds" \
+        "" \
+        "Build here and install from the host:" \
+        "  ./scripts/build-kernel.sh --base ${BASE} --no-install --workdir /artifact/kernel/build" \
+        "" \
+        "then, on the host, in the same directory:" \
+        "  cd kernel/build/linux-${KERNEL_VERSION} && sudo make modules_install && sudo make install" \
+        "" \
+        "Or boot the bzImage under QEMU without installing it at all."
 fi
 
 mkdir -p "$WORKDIR" 2>/dev/null || die 4 "cannot create work directory: ${WORKDIR}" \
@@ -266,7 +386,7 @@ if ((DO_INSTALL)) && ((!ASSUME_YES)); then
 ${C_YEL}This will build Linux ${KERNEL_VERSION}${LOCALVERSION} and then install it:${C_OFF}
 
   source     ${SRCDIR}
-  base       ${BASE}
+  base       ${BASE}${RUNNING_CONFIG:+  (${RUNNING_CONFIG})}
   modules -> /lib/modules/${KERNEL_VERSION}${LOCALVERSION}/
   kernel  -> /boot/  (via 'make install', which runs your distro's
              installkernel hook and usually regenerates the bootloader menu)
@@ -380,7 +500,7 @@ case "$BASE" in
             "Re-run verbosely to see why:  cd '${SRCDIR}' && make defconfig"
         ok "make defconfig"
         ;;
-    running)
+    running|file)
         cp_cmd=(cp "$RUNNING_CONFIG" .config)
         [[ "$RUNNING_CONFIG" == *.gz ]] && cp_cmd=(sh -c "zcat '$RUNNING_CONFIG' > .config")
         "${cp_cmd[@]}" || die 7 "could not install ${RUNNING_CONFIG} as .config"

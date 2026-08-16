@@ -385,6 +385,23 @@ The image's `CMD` is a shell, not the pipeline. Inside it you are root, so run
 `verify` stage compiles the artifact and runs a userspace test, so a broken
 toolchain fails the build rather than the run.
 
+If you also intend to build a kernel in there with `scripts/build-kernel.sh`,
+mount the host's `/boot` as well — a container shares the host's kernel but not
+its filesystem, so `--base running` cannot otherwise read the config of the
+kernel `uname -r` reports:
+
+```bash
+docker run --rm -it -v "$PWD:/artifact" -v /boot:/host/boot:ro bpf-arena-ds
+```
+
+The script looks in `/host/boot` before `/boot`, so `--base running` then works
+unchanged. Without the mount, either copy the config in and pass
+`--config ./host.config`, or use `--base full`, which needs nothing from the
+host. Either way add `--no-install`: installing writes to `/lib/modules` and
+`/boot`, which are the container's own unless bind-mounted, and the container
+cannot reboot the host into the result. See the README's
+[`--base running` FAQ entry](README.md#--base-running-does-not-work-inside-the-container).
+
 ### Alternatives and special cases
 
 **Convenience script.** One command, no repository setup; upstream explicitly
